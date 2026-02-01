@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Song } from "$lib/types";
+	import { Tooltip } from "$lib/components/ui";
 
 	interface Props {
 		song: Song;
@@ -24,6 +25,26 @@
 				: "hover:bg-secondary/50"
 			: "bg-red-500/10",
 	);
+
+	// Tooltip text helpers
+	const positionTooltip = $derived(() => {
+		if (song.positionChange === 'new') {
+			return song.lastWeekPosition === null
+				? 'New entry to the chart this week'
+				: `New to top 5 (was #${song.lastWeekPosition} last week)`;
+		}
+		if (song.positionChange === 'up') {
+			return `Moved up from #${song.lastWeekPosition}`;
+		}
+		if (song.positionChange === 'down') {
+			return `Moved down from #${song.lastWeekPosition}`;
+		}
+		return 'Same position as last week';
+	});
+
+	const streakTooltip = $derived(
+		`${song.weeksInTop5} consecutive week${song.weeksInTop5 > 1 ? 's' : ''} in the top 5`
+	);
 </script>
 
 <div
@@ -36,6 +57,51 @@
 		{song.position === 1 ? 'bg-spotify text-black' : 'bg-secondary'}"
 	>
 		{song.position}
+	</div>
+
+	<!-- Position Change & Streak Indicators (fixed width for alignment) -->
+	<div class="flex w-12 shrink-0 items-center justify-start gap-0.5">
+		<!-- Change indicator (fixed width) -->
+		<span class="w-6 text-center">
+			{#if song.positionChange === 'new'}
+				<Tooltip text={positionTooltip()}>
+					{#snippet children()}
+						<span class="cursor-help rounded bg-blue-500/20 px-1 py-0.5 text-[8px] font-bold text-blue-400">
+							NEW
+						</span>
+					{/snippet}
+				</Tooltip>
+			{:else if song.positionChange === 'up'}
+				<Tooltip text={positionTooltip()}>
+					{#snippet children()}
+						<span class="cursor-help text-[10px] text-green-500">▲</span>
+					{/snippet}
+				</Tooltip>
+			{:else if song.positionChange === 'down'}
+				<Tooltip text={positionTooltip()}>
+					{#snippet children()}
+						<span class="cursor-help text-[10px] text-red-400">▼</span>
+					{/snippet}
+				</Tooltip>
+			{:else}
+				<Tooltip text={positionTooltip()}>
+					{#snippet children()}
+						<span class="cursor-help text-[10px] text-muted-foreground">―</span>
+					{/snippet}
+				</Tooltip>
+			{/if}
+		</span>
+
+		<!-- Streak indicator (fixed width) -->
+		<span class="w-5 text-right text-[9px] font-medium text-muted-foreground">
+			{#if song.weeksInTop5 > 1}
+				<Tooltip text={streakTooltip}>
+					{#snippet children()}
+						<span class="cursor-help">+{song.weeksInTop5}</span>
+					{/snippet}
+				</Tooltip>
+			{/if}
+		</span>
 	</div>
 
 	<!-- Album Art -->

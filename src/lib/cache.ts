@@ -1,4 +1,5 @@
 import { Redis } from '@upstash/redis';
+import { env } from '$env/dynamic/private';
 
 export interface CachedTrack {
 	uri: string;
@@ -8,15 +9,17 @@ export interface CachedTrack {
 	image: string;
 }
 
-// Initialize Redis client - will use UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN env vars
+// Initialize Redis client
 let redis: Redis | null = null;
+let redisChecked = false;
 
 function getRedis(): Redis | null {
-	if (redis) return redis;
+	if (redisChecked) return redis;
+	redisChecked = true;
 
 	// Support both Vercel KV naming and direct Upstash naming
-	const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-	const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+	const url = env.KV_REST_API_URL || env.UPSTASH_REDIS_REST_URL;
+	const token = env.KV_REST_API_TOKEN || env.UPSTASH_REDIS_REST_TOKEN;
 
 	if (!url || !token) {
 		console.warn('Redis not configured - caching disabled. Expected KV_REST_API_URL/TOKEN or UPSTASH_REDIS_REST_URL/TOKEN');

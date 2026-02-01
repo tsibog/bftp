@@ -15,6 +15,10 @@ export interface Song {
 	original: { song: string; artist: string };
 	spotify: SpotifyTrack | null;
 	fromCache: boolean;
+	// Position tracking
+	lastWeekPosition: number | null; // null = new entry to chart
+	positionChange: 'up' | 'down' | 'same' | 'new';
+	weeksInTop5: number; // consecutive weeks in top 5
 }
 
 export interface FetchStats {

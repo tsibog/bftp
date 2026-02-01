@@ -1,9 +1,69 @@
 import { error } from '@sveltejs/kit';
 import { searchTrack, refreshAccessToken } from '$lib/spotify';
-import { getChartDatesForWeek, type BillboardChart } from '$lib/billboard';
+import {
+	getChartDatesForWeek,
+	getPreviousChartDates,
+	getPositionChange,
+	type BillboardChart
+} from '$lib/billboard';
 import { getFromCache, addToCache, isNotFoundCached, cacheNotFound } from '$lib/cache';
 import type { RequestHandler } from './$types';
 import validDates from '$lib/data/valid_dates.json';
+
+// Cache for chart data to avoid refetching
+const chartCache = new Map<string, BillboardChart>();
+
+async function fetchChart(baseUrl: string, chartDate: string): Promise<BillboardChart | null> {
+	if (chartCache.has(chartDate)) {
+		return chartCache.get(chartDate)!;
+	}
+
+	try {
+		const chartUrl = `${baseUrl}/billboard/date/${chartDate}.json`;
+		const res = await fetch(chartUrl);
+		if (!res.ok) return null;
+
+		const data: BillboardChart = await res.json();
+		chartCache.set(chartDate, data);
+		return data;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Calculate consecutive weeks a song has been in top 5
+ */
+async function calculateWeeksInTop5(
+	baseUrl: string,
+	songName: string,
+	artist: string,
+	currentChartDate: string
+): Promise<number> {
+	let streak = 1; // Current week counts as 1
+	const previousDates = getPreviousChartDates(currentChartDate, validDates, 52);
+
+	for (const prevDate of previousDates) {
+		const chart = await fetchChart(baseUrl, prevDate);
+		if (!chart) break;
+
+		// Check if song is in top 5 of previous chart
+		const top5 = chart.data.slice(0, 5);
+		const found = top5.some(
+			(s) =>
+				s.song.toLowerCase() === songName.toLowerCase() &&
+				s.artist.toLowerCase() === artist.toLowerCase()
+		);
+
+		if (found) {
+			streak++;
+		} else {
+			break; // Streak ended
+		}
+	}
+
+	return streak;
+}
 
 export const POST: RequestHandler = async ({ request, cookies, url }) => {
 	let accessToken = cookies.get('spotify_access_token');
@@ -73,6 +133,9 @@ export const POST: RequestHandler = async ({ request, cookies, url }) => {
 					original: { song: string; artist: string };
 					spotify: { uri: string; name: string; artists: string; album: string; image: string } | null;
 					fromCache: boolean;
+					lastWeekPosition: number | null;
+					positionChange: 'up' | 'down' | 'same' | 'new';
+					weeksInTop5: number;
 				}[] = [];
 
 				let cacheHits = 0;
@@ -81,13 +144,11 @@ export const POST: RequestHandler = async ({ request, cookies, url }) => {
 
 				// Process each year
 				for (const [year, chartDate] of chartDates) {
-					// Load chart data via HTTP (static files aren't on filesystem in serverless)
-					const chartUrl = `${url.origin}/billboard/date/${chartDate}.json`;
-					const chartRes = await fetch(chartUrl);
-					if (!chartRes.ok) {
+					// Load chart data (with caching)
+					const chartData = await fetchChart(url.origin, chartDate);
+					if (!chartData) {
 						throw new Error(`Failed to load chart for ${chartDate}`);
 					}
-					const chartData: BillboardChart = await chartRes.json();
 
 					// Get top 5 songs
 					const top5 = chartData.data.slice(0, 5);
@@ -138,13 +199,25 @@ export const POST: RequestHandler = async ({ request, cookies, url }) => {
 							}
 						}
 
+						// Calculate position change and streak
+						const positionChange = getPositionChange(song.this_week, song.last_week);
+						const weeksInTop5 = await calculateWeeksInTop5(
+							url.origin,
+							song.song,
+							song.artist,
+							chartDate
+						);
+
 						const songEntry = {
 							year,
 							chartDate,
 							position: song.this_week,
 							original: { song: song.song, artist: song.artist },
 							spotify: spotifyTrack,
-							fromCache
+							fromCache,
+							lastWeekPosition: song.last_week,
+							positionChange,
+							weeksInTop5
 						};
 
 						allSongs.push(songEntry);
