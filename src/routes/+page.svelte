@@ -6,10 +6,13 @@
 
 	let { data }: { data: PageData } = $props();
 
+	// Extract initial values (intentionally captured once)
+	const initialWeek = data.defaultWeek;
+
 	// ─────────────────────────────────────────────────────────────
 	// State
 	// ─────────────────────────────────────────────────────────────
-	let week = $state(data.defaultWeek);
+	let week = $state(initialWeek);
 	let yearRange = $state<[number, number]>([1985, 2005]);
 	let songs = $state<Song[]>([]);
 	let duplicateUris = $state<string[]>([]);

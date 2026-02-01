@@ -30,7 +30,7 @@ export interface Progress {
 
 export interface User {
 	name: string;
-	image?: string;
+	image?: string | null;
 }
 
 export interface YearRange {
