@@ -27,6 +27,9 @@ function getRedis(): Redis | null {
 	return redis;
 }
 
+// Increment this to invalidate all cached entries (e.g., after search logic changes)
+const CACHE_VERSION = 2;
+
 /**
  * Generate a cache key from song and artist
  */
@@ -34,7 +37,7 @@ export function getCacheKey(song: string, artist: string): string {
 	// Normalize: lowercase, remove special chars, trim
 	const normalizedSong = song.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
 	const normalizedArtist = artist.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
-	return `spotify:${normalizedSong}:::${normalizedArtist}`;
+	return `v${CACHE_VERSION}:spotify:${normalizedSong}:::${normalizedArtist}`;
 }
 
 /**
