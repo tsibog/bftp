@@ -25,6 +25,7 @@
   let isGenerating = $state(false);
   let isCreatingPlaylist = $state(false);
   let songsReady = $state(false);
+  let sidebarOpen = $state(true);
 
   // ─────────────────────────────────────────────────────────────
   // Derived
@@ -125,6 +126,7 @@
       showError(e instanceof Error ? e.message : "Failed to fetch songs");
     } finally {
       isGenerating = false;
+      sidebarOpen = false;
     }
   }
 
@@ -241,18 +243,52 @@
     {trackCount}
     {notification}
     {playError}
+    isOpen={sidebarOpen}
     onlogin={handleLogin}
     onlogout={handleLogout}
     onfetch={handleFetchSongs}
     oncreate={handleCreatePlaylist}
     onopenplaylist={handleOpenPlaylist}
+    onclose={() => (sidebarOpen = false)}
   />
 
-  <main class="flex-1 overflow-auto p-4">
-    {#if songs.length > 0}
-      <SongGrid {songs} {duplicateUris} {playingUri} onplay={handlePlay} />
-    {:else}
-      <EmptyState message={emptyMessage} />
-    {/if}
-  </main>
+  <!-- Main content area -->
+  <div class="flex flex-1 flex-col overflow-hidden">
+    <!-- Mobile header with hamburger -->
+    <header
+      class="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-4 md:hidden"
+    >
+      <button
+        class="flex h-9 w-9 items-center justify-center rounded-md hover:bg-secondary"
+        onclick={() => (sidebarOpen = true)}
+        aria-label="Open menu"
+      >
+        <svg
+          class="h-5 w-5"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M4 6h16M4 12h16M4 18h16"
+          />
+        </svg>
+      </button>
+      <h1 class="text-sm font-bold">
+        <span class="text-spotify">Blast</span> from the
+        <span class="text-spotify">Past</span>
+      </h1>
+    </header>
+
+    <main class="flex-1 overflow-auto p-4">
+      {#if songs.length > 0}
+        <SongGrid {songs} {duplicateUris} {playingUri} onplay={handlePlay} />
+      {:else}
+        <EmptyState message={emptyMessage} />
+      {/if}
+    </main>
+  </div>
 </div>
