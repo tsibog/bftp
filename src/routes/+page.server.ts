@@ -1,12 +1,9 @@
 import type { PageServerLoad } from './$types';
-import { readFileSync } from 'fs';
-import { join } from 'path';
 import { getYearRange, getNextWeekNumber } from '$lib/billboard';
+import validDates from '$lib/data/valid_dates.json';
 
 export const load: PageServerLoad = async ({ cookies }) => {
-	// Load valid dates to get year range
-	const validDatesPath = join(process.cwd(), 'static', 'billboard', 'valid_dates.json');
-	const validDates: string[] = JSON.parse(readFileSync(validDatesPath, 'utf-8'));
+	// valid dates loaded via import (works in serverless)
 	const yearRange = getYearRange(validDates);
 
 	// Get auth status from cookies

@@ -3,10 +3,9 @@ import { searchTrack, refreshAccessToken } from '$lib/spotify';
 import { getChartDatesForWeek, type BillboardChart } from '$lib/billboard';
 import { getFromCache, addToCache, isNotFoundCached, cacheNotFound } from '$lib/cache';
 import type { RequestHandler } from './$types';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import validDates from '$lib/data/valid_dates.json';
 
-export const POST: RequestHandler = async ({ request, cookies }) => {
+export const POST: RequestHandler = async ({ request, cookies, url }) => {
 	let accessToken = cookies.get('spotify_access_token');
 	const refreshToken = cookies.get('spotify_refresh_token');
 	const tokenExpires = cookies.get('spotify_token_expires');
@@ -52,10 +51,6 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 		throw error(400, 'Missing required parameters');
 	}
 
-	// Load valid dates
-	const validDatesPath = join(process.cwd(), 'static', 'billboard', 'valid_dates.json');
-	const validDates: string[] = JSON.parse(readFileSync(validDatesPath, 'utf-8'));
-
 	// Get chart dates for the requested week across years
 	const chartDates = getChartDatesForWeek(week, startYear, endYear, validDates);
 	const totalSongs = chartDates.size * 5;
@@ -86,9 +81,13 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 
 				// Process each year
 				for (const [year, chartDate] of chartDates) {
-					// Load chart data
-					const chartPath = join(process.cwd(), 'static', 'billboard', 'date', `${chartDate}.json`);
-					const chartData: BillboardChart = JSON.parse(readFileSync(chartPath, 'utf-8'));
+					// Load chart data via HTTP (static files aren't on filesystem in serverless)
+					const chartUrl = `${url.origin}/billboard/date/${chartDate}.json`;
+					const chartRes = await fetch(chartUrl);
+					if (!chartRes.ok) {
+						throw new Error(`Failed to load chart for ${chartDate}`);
+					}
+					const chartData: BillboardChart = await chartRes.json();
 
 					// Get top 5 songs
 					const top5 = chartData.data.slice(0, 5);
