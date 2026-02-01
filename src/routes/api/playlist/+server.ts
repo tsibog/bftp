@@ -121,8 +121,8 @@ export const POST: RequestHandler = async ({ request, cookies, url }) => {
 								fromCache = true;
 								cacheHits++;
 							} else {
-								// Actually search Spotify
-								spotifyTrack = await searchTrack(accessToken!, song.song, song.artist);
+								// Actually search Spotify (pass year for better matching)
+								spotifyTrack = await searchTrack(accessToken!, song.song, song.artist, year);
 								apiCalls++;
 
 								if (spotifyTrack) {

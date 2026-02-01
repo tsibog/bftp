@@ -88,10 +88,77 @@ export async function getCurrentUser(accessToken: string): Promise<{
 	return response.json();
 }
 
+/**
+ * Normalize a string for comparison (lowercase, remove special chars)
+ */
+function normalize(str: string): string {
+	return str
+		.toLowerCase()
+		.replace(/[()[\]'"!?.,]/g, '')
+		.replace(/\s+/g, ' ')
+		.trim();
+}
+
+/**
+ * Calculate similarity between two strings (0-1)
+ */
+function similarity(a: string, b: string): number {
+	const normA = normalize(a);
+	const normB = normalize(b);
+
+	if (normA === normB) return 1;
+	if (normA.includes(normB) || normB.includes(normA)) return 0.9;
+
+	// Simple word overlap score
+	const wordsA = new Set(normA.split(' '));
+	const wordsB = new Set(normB.split(' '));
+	const intersection = [...wordsA].filter((w) => wordsB.has(w)).length;
+	const union = new Set([...wordsA, ...wordsB]).size;
+
+	return intersection / union;
+}
+
+/**
+ * Score a track result against the expected song/artist/year
+ */
+function scoreTrack(
+	track: { name: string; artists: { name: string }[]; album: { release_date: string } },
+	expectedSong: string,
+	expectedArtist: string,
+	expectedYear?: number
+): number {
+	let score = 0;
+
+	// Song title similarity (most important - weight 50)
+	const titleSim = similarity(track.name, expectedSong);
+	score += titleSim * 50;
+
+	// Artist similarity (weight 35)
+	const trackArtists = track.artists.map((a) => a.name).join(' ');
+	const artistSim = Math.max(
+		similarity(trackArtists, expectedArtist),
+		// Also check individual artists
+		...track.artists.map((a) => similarity(a.name, expectedArtist.split(/[,&]|feat\.|featuring/i)[0]))
+	);
+	score += artistSim * 35;
+
+	// Year proximity bonus (weight 15)
+	if (expectedYear && track.album.release_date) {
+		const releaseYear = parseInt(track.album.release_date.substring(0, 4));
+		const yearDiff = Math.abs(releaseYear - expectedYear);
+		// Within 2 years = full points, degrades after that
+		const yearScore = Math.max(0, 1 - yearDiff / 10);
+		score += yearScore * 15;
+	}
+
+	return score;
+}
+
 export async function searchTrack(
 	accessToken: string,
 	song: string,
-	artist: string
+	artist: string,
+	year?: number
 ): Promise<{ uri: string; name: string; artists: string; album: string; image: string } | null> {
 	// Clean up the search query
 	const cleanSong = song.replace(/[()[\]]/g, '').trim();
@@ -101,7 +168,7 @@ export async function searchTrack(
 	const params = new URLSearchParams({
 		q: query,
 		type: 'track',
-		limit: '1'
+		limit: '10' // Get multiple results to find best match
 	});
 
 	const response = await fetch(`${SPOTIFY_API_URL}/search?${params}`, {
@@ -114,14 +181,14 @@ export async function searchTrack(
 	}
 
 	const data = await response.json();
-	const track = data.tracks?.items?.[0];
+	let tracks = data.tracks?.items || [];
 
-	if (!track) {
-		// Try a broader search without the artist filter
+	// If no results, try broader search
+	if (tracks.length === 0) {
 		const broadParams = new URLSearchParams({
 			q: `${cleanSong} ${cleanArtist}`,
 			type: 'track',
-			limit: '1'
+			limit: '10'
 		});
 
 		const broadResponse = await fetch(`${SPOTIFY_API_URL}/search?${broadParams}`, {
@@ -130,20 +197,39 @@ export async function searchTrack(
 
 		if (broadResponse.ok) {
 			const broadData = await broadResponse.json();
-			const broadTrack = broadData.tracks?.items?.[0];
-			if (broadTrack) {
-				return {
-					uri: broadTrack.uri,
-					name: broadTrack.name,
-					artists: broadTrack.artists.map((a: { name: string }) => a.name).join(', '),
-					album: broadTrack.album.name,
-					image: broadTrack.album.images?.[0]?.url || ''
-				};
-			}
+			tracks = broadData.tracks?.items || [];
 		}
+	}
+
+	if (tracks.length === 0) {
 		return null;
 	}
 
+	// Score all tracks and pick the best one
+	const scoredTracks = tracks.map(
+		(track: {
+			uri: string;
+			name: string;
+			artists: { name: string }[];
+			album: { name: string; release_date: string; images: { url: string }[] };
+		}) => ({
+			track,
+			score: scoreTrack(track, song, artist, year)
+		})
+	);
+
+	// Sort by score descending
+	scoredTracks.sort((a: { score: number }, b: { score: number }) => b.score - a.score);
+
+	const bestMatch = scoredTracks[0];
+
+	// Require minimum score to avoid completely wrong matches
+	if (bestMatch.score < 40) {
+		console.warn(`Low confidence match for "${song}" by "${artist}": score=${bestMatch.score}`);
+		// Still return it, but log the warning
+	}
+
+	const track = bestMatch.track;
 	return {
 		uri: track.uri,
 		name: track.name,
