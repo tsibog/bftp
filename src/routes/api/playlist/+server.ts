@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { searchTrack, refreshAccessToken } from '$lib/spotify';
+import { searchTrack, getClientCredentialsToken } from '$lib/spotify';
 import {
 	getChartDatesForWeek,
 	getPreviousChartDates,
@@ -65,39 +65,13 @@ async function calculateWeeksInTop5(
 	return streak;
 }
 
-export const POST: RequestHandler = async ({ request, cookies, url }) => {
-	let accessToken = cookies.get('spotify_access_token');
-	const refreshToken = cookies.get('spotify_refresh_token');
-	const tokenExpires = cookies.get('spotify_token_expires');
-
-	if (!accessToken || !refreshToken) {
-		throw error(401, 'Not authenticated');
-	}
-
-	// Check if token needs refresh
-	if (tokenExpires && Date.now() > parseInt(tokenExpires) - 60000) {
-		try {
-			const newTokens = await refreshAccessToken(refreshToken);
-			accessToken = newTokens.access_token;
-			const expiresAt = Date.now() + newTokens.expires_in * 1000;
-
-			cookies.set('spotify_access_token', accessToken, {
-				path: '/',
-				httpOnly: true,
-				sameSite: 'lax',
-				secure: false,
-				maxAge: newTokens.expires_in
-			});
-			cookies.set('spotify_token_expires', expiresAt.toString(), {
-				path: '/',
-				httpOnly: true,
-				sameSite: 'lax',
-				secure: false,
-				maxAge: 60 * 60 * 24 * 30
-			});
-		} catch {
-			throw error(401, 'Token refresh failed');
-		}
+export const POST: RequestHandler = async ({ request, url }) => {
+	// Use Client Credentials token for search (no user login required)
+	let accessToken: string;
+	try {
+		accessToken = await getClientCredentialsToken();
+	} catch {
+		throw error(500, 'Failed to obtain Spotify API token');
 	}
 
 	const body = await request.json();

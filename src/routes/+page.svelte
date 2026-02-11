@@ -36,11 +36,7 @@
 
   const trackCount = $derived(songs.filter((s) => s.spotify).length);
 
-  const emptyMessage = $derived(
-    data.isAuthenticated
-      ? "Select week & years, then generate"
-      : "Login to get started",
-  );
+  const emptyMessage = "Select week & years, then fetch songs";
 
   // ─────────────────────────────────────────────────────────────
   // Actions
@@ -205,6 +201,11 @@
   // Play song
   // ─────────────────────────────────────────────────────────────
   async function handlePlay(uri: string) {
+    if (!data.isAuthenticated) {
+      showError("Login to play tracks on Spotify");
+      return;
+    }
+
     playingUri = uri;
 
     try {
