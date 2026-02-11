@@ -3,6 +3,12 @@
   import type { Song, FetchStats, Progress } from "$lib/types";
   import { Sidebar } from "$lib/components/sidebar";
   import { SongGrid, EmptyState } from "$lib/components/playlist";
+  import {
+    getChartDatesForWeek,
+    getPositionChange,
+    type BillboardChart,
+  } from "$lib/billboard";
+  import validDates from "$lib/data/valid_dates.json";
 
   let { data }: { data: PageData } = $props();
 
@@ -64,7 +70,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────
-  // Fetch songs via SSE
+  // Fetch chart data from CDN (client-side) then search Spotify (server-side)
   // ─────────────────────────────────────────────────────────────
   async function handleFetchSongs() {
     // Reset state
@@ -77,14 +83,65 @@
     songsReady = false;
 
     try {
+      // 1. Get chart dates for the requested week across years
+      const chartDates = getChartDatesForWeek(
+        week,
+        yearRange[0],
+        yearRange[1],
+        validDates,
+      );
+
+      // 2. Fetch chart data from CDN and extract top 5 songs
+      const chartSongs: {
+        year: number;
+        chartDate: string;
+        song: string;
+        artist: string;
+        position: number;
+        lastWeekPosition: number | null;
+        positionChange: "up" | "down" | "same" | "new";
+        weeksOnChart: number;
+      }[] = [];
+
+      for (const [year, chartDate] of chartDates) {
+        try {
+          const res = await fetch(`/billboard/date/${chartDate}.json`);
+          if (!res.ok) continue;
+
+          const chart: BillboardChart = await res.json();
+          const top5 = chart.data.slice(0, 5);
+
+          for (const entry of top5) {
+            chartSongs.push({
+              year,
+              chartDate,
+              song: entry.song,
+              artist: entry.artist,
+              position: entry.this_week,
+              lastWeekPosition: entry.last_week,
+              positionChange: getPositionChange(
+                entry.this_week,
+                entry.last_week,
+              ),
+              weeksOnChart: entry.weeks_on_chart,
+            });
+          }
+        } catch {
+          // Skip years where chart data can't be loaded
+          continue;
+        }
+      }
+
+      if (chartSongs.length === 0) {
+        showError("No chart data found for the selected week and years");
+        return;
+      }
+
+      // 3. Send songs to server for Spotify search
       const response = await fetch("/api/playlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          week,
-          startYear: yearRange[0],
-          endYear: yearRange[1],
-        }),
+        body: JSON.stringify({ songs: chartSongs }),
       });
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
