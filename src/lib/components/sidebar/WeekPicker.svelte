@@ -1,11 +1,12 @@
 <script lang="ts">
 	interface Props {
 		value: number;
+		currentWeek: number;
 		onchange?: (week: number) => void;
 		onenter?: () => void;
 	}
 
-	let { value = $bindable(), onchange, onenter }: Props = $props();
+	let { value = $bindable(), currentWeek, onchange, onenter }: Props = $props();
 
 	function handleInput(e: Event) {
 		const target = e.target as HTMLInputElement;
@@ -24,7 +25,7 @@
 </script>
 
 <div class="mb-4">
-	<label for="week" class="mb-1 block text-xs text-muted-foreground">Week</label>
+	<label for="week" class="mb-1 block text-xs text-muted-foreground">Current week: {currentWeek}</label>
 	<input
 		id="week"
 		type="number"

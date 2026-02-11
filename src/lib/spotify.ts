@@ -12,6 +12,43 @@ const SCOPES = [
 	'user-read-playback-state'
 ].join(' ');
 
+// Client Credentials token cache (app-level, no user login required)
+let clientToken: string | null = null;
+let clientTokenExpires = 0;
+
+/**
+ * Get an app-level access token using Client Credentials flow.
+ * This does NOT require user login and can access public endpoints like Search.
+ */
+export async function getClientCredentialsToken(): Promise<string> {
+	// Return cached token if still valid (with 60s buffer)
+	if (clientToken && Date.now() < clientTokenExpires - 60000) {
+		return clientToken;
+	}
+
+	const response = await fetch(SPOTIFY_TOKEN_URL, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/x-www-form-urlencoded',
+			Authorization: `Basic ${btoa(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`)}`
+		},
+		body: new URLSearchParams({
+			grant_type: 'client_credentials'
+		})
+	});
+
+	if (!response.ok) {
+		const error = await response.text();
+		throw new Error(`Client credentials token request failed: ${error}`);
+	}
+
+	const data = await response.json();
+	clientToken = data.access_token;
+	clientTokenExpires = Date.now() + data.expires_in * 1000;
+
+	return clientToken!;
+}
+
 export function getAuthUrl(state: string): string {
 	const params = new URLSearchParams({
 		client_id: SPOTIFY_CLIENT_ID,

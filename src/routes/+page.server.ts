@@ -1,5 +1,5 @@
 import type { PageServerLoad } from './$types';
-import { getYearRange, getNextWeekNumber } from '$lib/billboard';
+import { getYearRange, getCurrentWeekNumber } from '$lib/billboard';
 import validDates from '$lib/data/valid_dates.json';
 
 export const load: PageServerLoad = async ({ cookies }) => {
@@ -20,6 +20,6 @@ export const load: PageServerLoad = async ({ cookies }) => {
 				}
 			: null,
 		yearRange,
-		defaultWeek: getNextWeekNumber()
+		defaultWeek: getCurrentWeekNumber()
 	};
 };
