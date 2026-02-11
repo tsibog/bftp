@@ -232,6 +232,7 @@
     isAuthenticated={data.isAuthenticated}
     user={data.user}
     bind:week
+    currentWeek={data.defaultWeek}
     bind:yearRange
     yearBounds={data.yearRange}
     {playlistName}

@@ -94,13 +94,10 @@ export function getChartDatesForWeek(
 }
 
 /**
- * Get current week number (next week by default)
+ * Get current ISO week number
  */
-export function getNextWeekNumber(): number {
-	const now = new Date();
-	const currentWeek = getISOWeek(now);
-	// Return next week, wrap around at year end
-	return currentWeek >= 52 ? 1 : currentWeek + 1;
+export function getCurrentWeekNumber(): number {
+	return getISOWeek(new Date());
 }
 
 /**

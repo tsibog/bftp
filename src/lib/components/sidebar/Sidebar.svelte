@@ -11,6 +11,7 @@
     isAuthenticated: boolean;
     user: User | null;
     week: number;
+    currentWeek: number;
     yearRange: [number, number];
     yearBounds: YearRange;
     playlistName: string;
@@ -38,6 +39,7 @@
     isAuthenticated,
     user,
     week = $bindable(),
+    currentWeek,
     yearRange = $bindable(),
     yearBounds,
     playlistName,
@@ -109,7 +111,7 @@
     <UserBadge {user} {onlogout} />
   {/if}
 
-  <WeekPicker bind:value={week} onchange={onweekchange} onenter={onfetch} />
+  <WeekPicker bind:value={week} {currentWeek} onchange={onweekchange} onenter={onfetch} />
 
   <YearRangeSlider
     bind:value={yearRange}

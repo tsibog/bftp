@@ -121,7 +121,9 @@ export const POST: RequestHandler = async ({ request, url }) => {
 					// Load chart data (with caching)
 					const chartData = await fetchChart(url.origin, chartDate);
 					if (!chartData) {
-						throw new Error(`Failed to load chart for ${chartDate}`);
+						// Skip years where chart data isn't available
+						console.warn(`Skipping ${year}: no chart data for ${chartDate}`);
+						continue;
 					}
 
 					// Get top 5 songs
