@@ -9,20 +9,18 @@ export interface CachedTrack {
 	image: string;
 }
 
-// Initialize Redis client
 let redis: Redis | null = null;
 let redisChecked = false;
 
-function getRedis(): Redis | null {
+export function getRedis(): Redis | null {
 	if (redisChecked) return redis;
 	redisChecked = true;
 
-	// Support both Vercel KV naming and direct Upstash naming
 	const url = env.KV_REST_API_URL || env.UPSTASH_REDIS_REST_URL;
 	const token = env.KV_REST_API_TOKEN || env.UPSTASH_REDIS_REST_TOKEN;
 
 	if (!url || !token) {
-		console.warn('Redis not configured - caching disabled. Expected KV_REST_API_URL/TOKEN or UPSTASH_REDIS_REST_URL/TOKEN');
+		console.warn('Redis not configured - caching disabled');
 		return null;
 	}
 
@@ -30,81 +28,130 @@ function getRedis(): Redis | null {
 	return redis;
 }
 
-// Increment this to invalidate all cached entries (e.g., after search logic changes)
 const CACHE_VERSION = 2;
 
-/**
- * Generate a cache key from song and artist
- */
-export function getCacheKey(song: string, artist: string): string {
-	// Normalize: lowercase, remove special chars, trim
-	const normalizedSong = song.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
-	const normalizedArtist = artist.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
-	return `v${CACHE_VERSION}:spotify:${normalizedSong}:::${normalizedArtist}`;
+function normalize(str: string): string {
+	return str.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
 }
 
-/**
- * Get a track from cache
- */
+export function getCacheKey(song: string, artist: string): string {
+	return `v${CACHE_VERSION}:spotify:${normalize(song)}:::${normalize(artist)}`;
+}
+
 export async function getFromCache(song: string, artist: string): Promise<CachedTrack | null> {
 	const client = getRedis();
 	if (!client) return null;
 
 	try {
-		const key = getCacheKey(song, artist);
-		const cached = await client.get<CachedTrack>(key);
-		return cached;
+		return await client.get<CachedTrack>(getCacheKey(song, artist));
 	} catch (e) {
 		console.error('Cache get error:', e);
 		return null;
 	}
 }
 
-/**
- * Add a track to cache (with 90 day expiry)
- */
 export async function addToCache(song: string, artist: string, track: CachedTrack): Promise<void> {
 	const client = getRedis();
 	if (!client) return;
 
 	try {
-		const key = getCacheKey(song, artist);
-		// Cache for 90 days
-		await client.set(key, track, { ex: 60 * 60 * 24 * 90 });
+		await client.set(getCacheKey(song, artist), track, { ex: 60 * 60 * 24 * 90 });
 	} catch (e) {
 		console.error('Cache set error:', e);
 	}
 }
 
-/**
- * Cache a "not found" result to avoid repeated API calls
- */
 export async function cacheNotFound(song: string, artist: string): Promise<void> {
 	const client = getRedis();
 	if (!client) return;
 
 	try {
-		const key = getCacheKey(song, artist) + ':notfound';
-		// Cache not-found for 7 days (songs might be added to Spotify later)
-		await client.set(key, true, { ex: 60 * 60 * 24 * 7 });
+		await client.set(getCacheKey(song, artist) + ':notfound', true, { ex: 60 * 60 * 24 * 7 });
 	} catch (e) {
 		console.error('Cache set error:', e);
 	}
 }
 
-/**
- * Check if a song was previously not found
- */
 export async function isNotFoundCached(song: string, artist: string): Promise<boolean> {
 	const client = getRedis();
 	if (!client) return false;
 
 	try {
-		const key = getCacheKey(song, artist) + ':notfound';
-		const cached = await client.get(key);
+		const cached = await client.get(getCacheKey(song, artist) + ':notfound');
 		return cached === true;
 	} catch (e) {
 		console.error('Cache get error:', e);
 		return false;
+	}
+}
+
+export interface StreakLookup {
+	chartDate: string;
+	song: string;
+	artist: string;
+}
+
+export interface StreakEntry extends StreakLookup {
+	weeks: { before: number; after: number };
+}
+
+function getStreakKey(chartDate: string, song: string, artist: string): string {
+	return `v${CACHE_VERSION}:streak:${chartDate}:${normalize(song)}:${normalize(artist)}`;
+}
+
+function getStreakCacheKey(lookup: StreakLookup): string {
+	return `${lookup.chartDate}:${lookup.song}:${lookup.artist}`;
+}
+
+export async function getStreaksFromCache(
+	songs: StreakLookup[]
+): Promise<Record<string, { before: number; after: number } | null>> {
+	const client = getRedis();
+	if (!client || songs.length === 0) {
+		return Object.fromEntries(songs.map((s) => [getStreakCacheKey(s), null]));
+	}
+
+	try {
+		const pipeline = client.pipeline();
+		const keys: { key: string; lookup: StreakLookup }[] = [];
+
+		for (const song of songs) {
+			const key = getStreakKey(song.chartDate, song.song, song.artist);
+			keys.push({ key, lookup: song });
+			pipeline.get(key);
+		}
+
+		const results = await pipeline.exec();
+		const streaks: Record<string, { before: number; after: number } | null> = {};
+
+		for (let i = 0; i < keys.length; i++) {
+			const cacheKey = getStreakCacheKey(keys[i].lookup);
+			const value = results[i];
+			streaks[cacheKey] = value && typeof value === 'object' && 'before' in value && 'after' in value
+				? value as { before: number; after: number }
+				: null;
+		}
+
+		return streaks;
+	} catch (e) {
+		console.error('Streak cache get error:', e);
+		return Object.fromEntries(songs.map((s) => [getStreakCacheKey(s), null]));
+	}
+}
+
+export async function cacheStreaks(streaks: StreakEntry[]): Promise<void> {
+	const client = getRedis();
+	if (!client || streaks.length === 0) return;
+
+	try {
+		const pipeline = client.pipeline();
+
+		for (const entry of streaks) {
+			pipeline.set(getStreakKey(entry.chartDate, entry.song, entry.artist), entry.weeks);
+		}
+
+		await pipeline.exec();
+	} catch (e) {
+		console.error('Streak cache set error:', e);
 	}
 }

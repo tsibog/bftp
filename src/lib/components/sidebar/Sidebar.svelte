@@ -1,11 +1,10 @@
 <script lang="ts">
-  import { Button } from "$lib/components/ui";
-  import type { User, YearRange, Progress, FetchStats } from "$lib/types";
+  import type { FetchStats, Progress, User, YearRange } from "$lib/types";
+  import PlaylistControls from "./PlaylistControls.svelte";
+  import Toast from "./Toast.svelte";
   import UserBadge from "./UserBadge.svelte";
   import WeekPicker from "./WeekPicker.svelte";
   import YearRangeSlider from "./YearRangeSlider.svelte";
-  import PlaylistControls from "./PlaylistControls.svelte";
-  import Toast from "./Toast.svelte";
 
   interface Props {
     isAuthenticated: boolean;
@@ -16,6 +15,7 @@
     yearBounds: YearRange;
     playlistName: string;
     isGenerating: boolean;
+    isPreparing: boolean;
     progress: Progress;
     fetchStats: FetchStats | null;
     songsReady: boolean;
@@ -44,6 +44,7 @@
     yearBounds,
     playlistName,
     isGenerating,
+    isPreparing,
     progress,
     fetchStats,
     songsReady,
@@ -111,7 +112,12 @@
     <UserBadge {user} {onlogout} />
   {/if}
 
-  <WeekPicker bind:value={week} {currentWeek} onchange={onweekchange} onenter={onfetch} />
+  <WeekPicker
+    bind:value={week}
+    {currentWeek}
+    onchange={onweekchange}
+    onenter={onfetch}
+  />
 
   <YearRangeSlider
     bind:value={yearRange}
@@ -124,6 +130,7 @@
     {isAuthenticated}
     {playlistName}
     {isGenerating}
+    {isPreparing}
     {progress}
     {fetchStats}
     {songsReady}
@@ -141,14 +148,27 @@
 
   <div class="flex-1"></div>
 
+  {#if typeof window !== "undefined" && window.location.hostname === "127.0.0.1"}
+    <div class="mb-4 border-t border-border pt-4">
+      <button
+        class="w-full rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive hover:bg-destructive/20"
+        onclick={async () => {
+          const res = await fetch("/api/streaks", { method: "DELETE" });
+          const data = await res.json();
+          console.log("Cache cleared:", data);
+          alert(`Streak cache cleared: ${data.deleted || 0} keys deleted`);
+        }}
+      >
+        Clear Streak Cache
+      </button>
+    </div>
+  {/if}
+
   <!-- Footer -->
   <div class="flex items-center justify-between text-xs text-muted-foreground">
     <span>Data: 1958–2026</span>
     {#if !isAuthenticated}
-      <button
-        class="text-spotify hover:underline"
-        onclick={onlogin}
-      >
+      <button class="text-spotify hover:underline" onclick={onlogin}>
         Login
       </button>
     {/if}

@@ -141,13 +141,11 @@ export function getPreviousChartDates(
 	validDates: string[],
 	maxCount: number = 52
 ): string[] {
-	// Sort valid dates and find ones before current date
 	const sortedDates = [...validDates].sort();
 	const currentIndex = sortedDates.indexOf(currentDate);
 
 	if (currentIndex <= 0) return [];
 
-	// Get previous dates (most recent first)
 	const previousDates: string[] = [];
 	for (let i = currentIndex - 1; i >= 0 && previousDates.length < maxCount; i--) {
 		previousDates.push(sortedDates[i]);
@@ -156,17 +154,96 @@ export function getPreviousChartDates(
 	return previousDates;
 }
 
-/**
- * Calculate position change indicator
- * "new" = new to the top 5 (wasn't in top 5 last week or wasn't on chart at all)
- */
+export function getSameYearFutureDates(
+	currentDate: string,
+	validDates: string[],
+	maxCount: number = 52
+): string[] {
+	const currentYear = currentDate.substring(0, 4);
+	const sortedDates = [...validDates].sort();
+	const currentIndex = sortedDates.indexOf(currentDate);
+
+	if (currentIndex === -1 || currentIndex >= sortedDates.length - 1) return [];
+
+	const futureDates: string[] = [];
+	for (let i = currentIndex + 1; i < sortedDates.length && futureDates.length < maxCount; i++) {
+		const date = sortedDates[i];
+		if (date.startsWith(currentYear)) {
+			futureDates.push(date);
+		} else {
+			break;
+		}
+	}
+
+	return futureDates;
+}
+
+
+
 export function getPositionChange(
 	thisWeek: number,
 	lastWeek: number | null
 ): 'up' | 'down' | 'same' | 'new' {
-	// New to top 5: wasn't on chart, or was outside top 5
 	if (lastWeek === null || lastWeek > 5) return 'new';
-	if (lastWeek > thisWeek) return 'up'; // lower number = higher position
+	if (lastWeek > thisWeek) return 'up';
 	if (lastWeek < thisWeek) return 'down';
 	return 'same';
+}
+
+export interface ChartFetcher {
+	(date: string): Promise<BillboardChart | null>;
+}
+
+export interface StreakResult {
+	before: number;
+	after: number;
+}
+
+export async function calculateTop5Streak(
+	song: string,
+	artist: string,
+	chartDate: string,
+	validDates: string[],
+	fetchChart: ChartFetcher
+): Promise<StreakResult> {
+	const previousDates = getPreviousChartDates(chartDate, validDates);
+	const futureDates = getSameYearFutureDates(chartDate, validDates);
+
+	let backwardsCount = 0;
+	let forwardsCount = 0;
+
+	for (const prevDate of previousDates) {
+		const chart = await fetchChart(prevDate);
+		if (!chart) break;
+
+		const inTop5 = chart.data
+			.slice(0, 5)
+			.some((entry) => entry.song === song && entry.artist === artist);
+
+		if (inTop5) {
+			backwardsCount++;
+		} else {
+			break;
+		}
+	}
+
+	for (const futureDate of futureDates) {
+		const chart = await fetchChart(futureDate);
+		if (!chart) break;
+
+		const inTop5 = chart.data
+			.slice(0, 5)
+			.some((entry) => entry.song === song && entry.artist === artist);
+
+		if (inTop5) {
+			forwardsCount++;
+		} else {
+			break;
+		}
+	}
+
+	return {
+		before: backwardsCount + 1,
+		after: forwardsCount
+	};
 }

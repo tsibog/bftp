@@ -18,7 +18,7 @@ export interface Song {
 	// Position tracking
 	lastWeekPosition: number | null; // null = new entry to chart
 	positionChange: 'up' | 'down' | 'same' | 'new';
-	weeksInTop5: number; // consecutive weeks in top 5
+	weeksInTop5: { before: number; after: number }; // consecutive weeks in top 5 (before includes current)
 }
 
 export interface FetchStats {

@@ -11,7 +11,7 @@ interface ChartSong {
 	position: number;
 	lastWeekPosition: number | null;
 	positionChange: 'up' | 'down' | 'same' | 'new';
-	weeksOnChart: number;
+	weeksInTop5: number;
 }
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -111,7 +111,7 @@ export const POST: RequestHandler = async ({ request }) => {
 						fromCache,
 						lastWeekPosition: chartSong.lastWeekPosition,
 						positionChange: chartSong.positionChange,
-						weeksInTop5: chartSong.weeksOnChart
+						weeksInTop5: chartSong.weeksInTop5
 					};
 
 					allSongs.push(songEntry);

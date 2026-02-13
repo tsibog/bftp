@@ -6,6 +6,7 @@
 		isAuthenticated: boolean;
 		playlistName: string;
 		isGenerating: boolean;
+		isPreparing: boolean;
 		progress: Progress;
 		fetchStats: FetchStats | null;
 		songsReady: boolean;
@@ -22,6 +23,7 @@
 		isAuthenticated,
 		playlistName,
 		isGenerating,
+		isPreparing,
 		progress,
 		fetchStats,
 		songsReady,
@@ -45,11 +47,17 @@
 <!-- Fetch Songs Button -->
 <Button
 	variant="spotify"
-	disabled={isGenerating}
+	disabled={isGenerating || isPreparing}
 	onclick={onfetch}
 	class="mb-2"
 >
-	{#if isGenerating}
+	{#if isPreparing}
+		<svg class="mr-2 h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+			<circle cx="12" cy="12" r="10" stroke-opacity="0.25" />
+			<path d="M12 2a10 10 0 0 1 10 10" />
+		</svg>
+		Preparing…
+	{:else if isGenerating}
 		<span class="font-mono">{progress.current}/{progress.total}</span>
 	{:else}
 		Fetch Songs

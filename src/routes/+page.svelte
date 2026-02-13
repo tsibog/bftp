@@ -1,25 +1,44 @@
 <script lang="ts">
-  import type { PageData } from "./$types";
-  import type { Song, FetchStats, Progress } from "$lib/types";
-  import { Sidebar } from "$lib/components/sidebar";
-  import { SongGrid, EmptyState } from "$lib/components/playlist";
   import {
+    calculateTop5Streak,
     getChartDatesForWeek,
     getPositionChange,
     type BillboardChart,
   } from "$lib/billboard";
+  import {
+    EmptyState,
+    SongGrid,
+    SongGridSkeleton,
+  } from "$lib/components/playlist";
+  import { Sidebar } from "$lib/components/sidebar";
   import validDates from "$lib/data/valid_dates.json";
+  import type { FetchStats, Progress, Song } from "$lib/types";
+  import type { PageData } from "./$types";
 
   let { data }: { data: PageData } = $props();
 
   // Extract initial values (intentionally captured once)
   const initialWeek = data.defaultWeek;
 
+  function getRandomYearRange(
+    min: number,
+    max: number,
+    minGap = 10,
+  ): [number, number] {
+    const maxStart = max - minGap;
+    const start = Math.floor(Math.random() * (maxStart - min + 1)) + min;
+    const end =
+      start + minGap + Math.floor(Math.random() * (max - start - minGap + 1));
+    return [start, end];
+  }
+
   // ─────────────────────────────────────────────────────────────
   // State
   // ─────────────────────────────────────────────────────────────
   let week = $state(initialWeek);
-  let yearRange = $state<[number, number]>([1969, 2020]);
+  let yearRange = $state<[number, number]>(
+    getRandomYearRange(data.yearRange.min, data.yearRange.max),
+  );
   let songs = $state<Song[]>([]);
   let duplicateUris = $state<string[]>([]);
   let playlistUrl = $state<string | null>(null);
@@ -29,6 +48,7 @@
   let notification = $state<string | null>(null);
   let playError = $state<string | null>(null);
   let isGenerating = $state(false);
+  let isPreparing = $state(false);
   let isCreatingPlaylist = $state(false);
   let songsReady = $state(false);
   let sidebarOpen = $state(true);
@@ -75,12 +95,17 @@
   async function handleFetchSongs() {
     // Reset state
     isGenerating = true;
+    isPreparing = true;
     progress = { current: 0, total: 0 };
     songs = [];
     duplicateUris = [];
     playlistUrl = null;
     fetchStats = null;
     songsReady = false;
+
+    if (window.innerWidth < 768) {
+      sidebarOpen = false;
+    }
 
     try {
       // 1. Get chart dates for the requested week across years
@@ -91,7 +116,6 @@
         validDates,
       );
 
-      // 2. Fetch chart data from CDN and extract top 5 songs
       const chartSongs: {
         year: number;
         chartDate: string;
@@ -100,7 +124,7 @@
         position: number;
         lastWeekPosition: number | null;
         positionChange: "up" | "down" | "same" | "new";
-        weeksOnChart: number;
+        weeksInTop5: { before: number; after: number };
       }[] = [];
 
       for (const [year, chartDate] of chartDates) {
@@ -123,7 +147,7 @@
                 entry.this_week,
                 entry.last_week,
               ),
-              weeksOnChart: entry.weeks_on_chart,
+              weeksInTop5: { before: 1, after: 0 },
             });
           }
         } catch {
@@ -137,7 +161,64 @@
         return;
       }
 
-      // 3. Send songs to server for Spotify search
+      // 3. Get cached streaks from server
+      const streakLookup = chartSongs.map((s) => ({
+        chartDate: s.chartDate,
+        song: s.song,
+        artist: s.artist,
+      }));
+
+      const streakRes = await fetch(
+        `/api/streaks?songs=${encodeURIComponent(JSON.stringify(streakLookup))}`,
+      );
+      const cachedStreaks: Record<string, { before: number; after: number }> = streakRes.ok
+        ? await streakRes.json()
+        : {};
+
+      // 4. Calculate streaks for cache misses
+      const streaksToCache: {
+        chartDate: string;
+        song: string;
+        artist: string;
+        weeks: { before: number; after: number };
+      }[] = [];
+
+      for (const song of chartSongs) {
+        const key = `${song.chartDate}:${song.song}:${song.artist}`;
+        if (cachedStreaks[key] !== undefined) {
+          song.weeksInTop5 = cachedStreaks[key];
+        } else {
+          const weeks = await calculateTop5Streak(
+            song.song,
+            song.artist,
+            song.chartDate,
+            validDates,
+            async (date) => {
+              const res = await fetch(`/billboard/date/${date}.json`);
+              if (!res.ok) return null;
+              return res.json();
+            },
+          );
+          song.weeksInTop5 = weeks;
+          streaksToCache.push({
+            chartDate: song.chartDate,
+            song: song.song,
+            artist: song.artist,
+            weeks,
+          });
+        }
+      }
+
+      // 5. Cache newly calculated streaks
+      if (streaksToCache.length > 0) {
+        await fetch("/api/streaks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ streaks: streaksToCache }),
+        });
+      }
+
+      // 6. Send songs to server for Spotify search
       const response = await fetch("/api/playlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -176,10 +257,10 @@
       }
     } catch (e) {
       console.error("Fetch error:", e);
+      isPreparing = false;
       showError(e instanceof Error ? e.message : "Failed to fetch songs");
     } finally {
       isGenerating = false;
-      sidebarOpen = false;
     }
   }
 
@@ -188,6 +269,7 @@
       case "init": {
         const { total } = data as { total: number };
         progress = { current: 0, total };
+        isPreparing = false;
         break;
       }
       case "song": {
@@ -294,6 +376,7 @@
     yearBounds={data.yearRange}
     {playlistName}
     {isGenerating}
+    {isPreparing}
     {progress}
     {fetchStats}
     {songsReady}
@@ -343,7 +426,9 @@
     </header>
 
     <main class="flex-1 overflow-auto p-4">
-      {#if songs.length > 0}
+      {#if isPreparing}
+        <SongGridSkeleton />
+      {:else if songs.length > 0}
         <SongGrid {songs} {duplicateUris} {playingUri} onplay={handlePlay} />
       {:else}
         <EmptyState message={emptyMessage} />
