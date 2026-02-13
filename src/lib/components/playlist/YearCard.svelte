@@ -2,10 +2,16 @@
   import type { Song } from "$lib/types";
   import SongRow from "./SongRow.svelte";
 
+  interface DuplicateColor {
+    bg: string;
+    text: string;
+  }
+
   interface Props {
     year: number;
     songs: Song[];
-    duplicateUris?: string[];
+    duplicateColorMap?: Record<string, number>;
+    duplicateColors?: DuplicateColor[];
     playingUri?: string | null;
     onplay?: (uri: string) => void;
   }
@@ -13,7 +19,8 @@
   let {
     year,
     songs,
-    duplicateUris = [],
+    duplicateColorMap = {},
+    duplicateColors = [],
     playingUri = null,
     onplay,
   }: Props = $props();
@@ -22,16 +29,9 @@
     [...songs].sort((a, b) => a.position - b.position),
   );
 
-  const chartDate = $derived(songs[0]?.chartDate);
-
-  const formattedDate = $derived(() => {
-    if (!chartDate) return "";
-    const date = new Date(chartDate);
-    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  });
-
-  function isDuplicate(uri: string | undefined): boolean {
-    return uri ? duplicateUris.includes(uri) : false;
+  function getDuplicateColor(uri: string | undefined): DuplicateColor | null {
+    if (!uri || !(uri in duplicateColorMap)) return null;
+    return duplicateColors[duplicateColorMap[uri]] ?? null;
   }
 </script>
 
@@ -49,7 +49,7 @@
     {#each sortedSongs as song, i (song.position)}
       <SongRow
         {song}
-        isDuplicate={isDuplicate(song.spotify?.uri)}
+        duplicateColor={getDuplicateColor(song.spotify?.uri)}
         isPlaying={playingUri === song.spotify?.uri}
         animationDelay={i * 0.03}
         {onplay}

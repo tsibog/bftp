@@ -4,7 +4,7 @@
 
   interface Props {
     song: Song;
-    isDuplicate?: boolean;
+    duplicateColor?: { bg: string; text: string } | null;
     isPlaying?: boolean;
     animationDelay?: number;
     onplay?: (uri: string) => void;
@@ -12,7 +12,7 @@
 
   let {
     song,
-    isDuplicate = false,
+    duplicateColor = null,
     isPlaying = false,
     animationDelay = 0,
     onplay,
@@ -20,13 +20,12 @@
 
   const rowClass = $derived(
     song.spotify
-      ? isDuplicate
-        ? "bg-yellow-500/10"
+      ? duplicateColor
+        ? duplicateColor.bg
         : "hover:bg-secondary/50"
       : "bg-red-500/10",
   );
 
-  // Tooltip text helpers
   const positionTooltip = $derived(() => {
     if (song.positionChange === "new") {
       return song.lastWeekPosition === null
@@ -42,11 +41,12 @@
     return "Same position as last week";
   });
 
-  const hasStreak = $derived(
-    song.weeksInTop5.before > 1 || song.weeksInTop5.after > 0,
+  const displayBefore = $derived(
+    song.positionChange === "new" ? 0 : song.weeksInTop5.before,
   );
+  const hasStreak = $derived(displayBefore > 1 || song.weeksInTop5.after > 0);
   const streakTooltip = $derived(
-    `${song.weeksInTop5.before} week${song.weeksInTop5.before > 1 ? "s" : ""} so far | ${song.weeksInTop5.after} more week${song.weeksInTop5.after > 1 ? "s" : ""} in top 5`,
+    `${displayBefore} week${displayBefore > 1 ? "s" : ""} so far | ${song.weeksInTop5.after} more week${song.weeksInTop5.after > 1 ? "s" : ""} in top 5`,
   );
 </script>
 
@@ -65,7 +65,7 @@
   <!-- Position Change & Streak Indicators (fixed width for alignment) -->
   <div class="flex shrink-0 items-center">
     <!-- Change indicator (fixed width) -->
-    <span class="w-8 text-center">
+    <span class="inline-flex w-8 items-center justify-center">
       {#if song.positionChange === "new"}
         <Tooltip text={positionTooltip()}>
           {#snippet children()}
@@ -99,13 +99,13 @@
 
     <!-- Streak indicator -->
     <span
-      class="w-[4.5rem] whitespace-nowrap text-[9px] font-medium tabular-nums tracking-tight text-muted-foreground"
+      class="w-14 whitespace-nowrap text-center text-[9px] font-medium tabular-nums tracking-tight text-muted-foreground ml-2"
     >
       {#if hasStreak}
         <Tooltip text={streakTooltip}>
           {#snippet children()}
             <span class="cursor-help"
-              >◀ {song.weeksInTop5.before.toString().padStart(2, "0")} | {song.weeksInTop5.after
+              >◀ {displayBefore.toString().padStart(2, "0")} | {song.weeksInTop5.after
                 .toString()
                 .padStart(2, "0")} ▶</span
             >
@@ -156,9 +156,9 @@
 
   <!-- Status & Actions -->
   <div class="flex shrink-0 items-center gap-0.5">
-    {#if isDuplicate}
+    {#if duplicateColor}
       <span
-        class="rounded bg-yellow-500/20 px-1 py-0.5 text-[8px] font-medium text-yellow-500"
+        class="rounded px-1 py-0.5 text-[8px] font-medium {duplicateColor.text} {duplicateColor.bg}"
       >
         DUP
       </span>
@@ -174,7 +174,7 @@
       <button
         onclick={() => onplay(song.spotify!.uri)}
         class="flex h-5 w-5 items-center justify-center rounded-full bg-spotify text-black
-				opacity-0 transition-opacity hover:bg-spotify-dark group-hover:opacity-100
+				opacity-100 transition-opacity hover:bg-spotify-dark md:opacity-0 md:group-hover:opacity-100
 				{isPlaying ? 'opacity-100' : ''}"
         title="Play"
       >

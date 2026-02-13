@@ -11,7 +11,7 @@ interface ChartSong {
 	position: number;
 	lastWeekPosition: number | null;
 	positionChange: 'up' | 'down' | 'same' | 'new';
-	weeksInTop5: number;
+	weeksInTop5: { before: number; after: number };
 }
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -52,7 +52,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					fromCache: boolean;
 					lastWeekPosition: number | null;
 					positionChange: 'up' | 'down' | 'same' | 'new';
-					weeksInTop5: number;
+					weeksInTop5: { before: number; after: number };
 				}[] = [];
 
 				let cacheHits = 0;
