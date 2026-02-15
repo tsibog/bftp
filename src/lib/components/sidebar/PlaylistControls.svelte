@@ -1,94 +1,67 @@
 <script lang="ts">
 	import { Button } from "$lib/components/ui";
-	import type { Progress, FetchStats } from "$lib/types";
+	import { getAuth, getOps } from "$lib/context";
 
 	interface Props {
-		isAuthenticated: boolean;
 		playlistName: string;
-		isGenerating: boolean;
-		isPreparing: boolean;
-		progress: Progress;
-		fetchStats: FetchStats | null;
-		songsReady: boolean;
-		isCreatingPlaylist: boolean;
-		playlistUrl: string | null;
-		trackCount: number;
 		onfetch?: () => void;
 		oncreate?: () => void;
-		onopenplaylist?: () => void;
-		onlogin?: () => void;
 	}
 
-	let {
-		isAuthenticated,
-		playlistName,
-		isGenerating,
-		isPreparing,
-		progress,
-		fetchStats,
-		songsReady,
-		isCreatingPlaylist,
-		playlistUrl,
-		trackCount,
-		onfetch,
-		oncreate,
-		onopenplaylist,
-		onlogin,
-	}: Props = $props();
+	let { playlistName, onfetch, oncreate }: Props = $props();
+
+	const ops = getOps();
+	const auth = getAuth();
 </script>
 
-<!-- Playlist Name Preview -->
 <div
 	class="mb-4 rounded bg-secondary/50 px-2 py-1.5 text-center font-mono text-sm font-bold text-spotify"
 >
 	{playlistName}
 </div>
 
-<!-- Fetch Songs Button -->
 <Button
 	variant="spotify"
-	disabled={isGenerating || isPreparing}
+	disabled={ops.isGenerating || ops.isPreparing}
 	onclick={onfetch}
 	class="mb-2"
 >
-	{#if isPreparing}
+	{#if ops.isPreparing}
 		<svg class="mr-2 h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 			<circle cx="12" cy="12" r="10" stroke-opacity="0.25" />
 			<path d="M12 2a10 10 0 0 1 10 10" />
 		</svg>
 		Preparing…
-	{:else if isGenerating}
-		<span class="font-mono">{progress.current}/{progress.total}</span>
+	{:else if ops.isGenerating}
+		<span class="font-mono">{ops.progress.current}/{ops.progress.total}</span>
 	{:else}
 		Fetch Songs
 	{/if}
 </Button>
 
-<!-- Fetch Stats -->
-{#if fetchStats && !playlistUrl}
+{#if ops.fetchStats && !ops.playlistUrl}
 	<div class="mb-2 text-center text-[10px] text-muted-foreground">
-		{fetchStats.cacheHits}⚡ {fetchStats.apiCalls}🔍
-		{#if fetchStats.notFound}
-			<span class="text-yellow-500">{fetchStats.notFound}✗</span>
+		{ops.fetchStats.cacheHits}⚡ {ops.fetchStats.apiCalls}🔍
+		{#if ops.fetchStats.notFound}
+			<span class="text-yellow-500">{ops.fetchStats.notFound}✗</span>
 		{/if}
 	</div>
 {/if}
 
-<!-- Create Playlist Button -->
-{#if songsReady && !playlistUrl}
-	{#if isAuthenticated}
+{#if ops.songsReady && !ops.playlistUrl}
+	{#if auth.isAuthenticated}
 		<Button
 			variant="secondary"
-			disabled={isCreatingPlaylist}
+			disabled={ops.isCreatingPlaylist}
 			onclick={oncreate}
 			class="mb-4"
 		>
-			{isCreatingPlaylist ? "Creating..." : "Create Playlist"}
+			{ops.isCreatingPlaylist ? "Creating..." : "Create Playlist"}
 		</Button>
 	{:else}
 		<Button
 			variant="spotify"
-			onclick={onlogin}
+			onclick={() => (window.location.href = "/api/auth/login")}
 			class="mb-4"
 		>
 			<svg class="mr-2 h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
@@ -101,18 +74,17 @@
 	{/if}
 {/if}
 
-<!-- Playlist Created Result -->
-{#if playlistUrl}
+{#if ops.playlistUrl}
 	<div class="mb-4 rounded border border-spotify/50 bg-spotify/10 p-2 text-xs">
 		<div class="mb-1 flex items-center justify-between">
 			<span class="font-medium text-spotify">Created!</span>
-			<span class="text-muted-foreground">{trackCount} tracks</span>
+			<span class="text-muted-foreground">{ops.trackCount} tracks</span>
 		</div>
 		<Button
 			variant="spotify"
 			size="sm"
 			class="w-full text-xs"
-			onclick={onopenplaylist}
+			onclick={() => ops.openPlaylist()}
 		>
 			Open in Spotify
 		</Button>

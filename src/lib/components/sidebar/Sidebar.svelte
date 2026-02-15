@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { FetchStats, Progress, User, YearRange } from "$lib/types";
+  import type { YearRange } from "$lib/types";
+  import { getAuth, getOps } from "$lib/context";
   import PlaylistControls from "./PlaylistControls.svelte";
   import Toast from "./Toast.svelte";
   import UserBadge from "./UserBadge.svelte";
@@ -7,89 +8,65 @@
   import YearRangeSlider from "./YearRangeSlider.svelte";
 
   interface Props {
-    isAuthenticated: boolean;
-    user: User | null;
-    week: number;
     currentWeek: number;
-    yearRange: [number, number];
     yearBounds: YearRange;
-    playlistName: string;
-    isGenerating: boolean;
-    isPreparing: boolean;
-    progress: Progress;
-    fetchStats: FetchStats | null;
-    songsReady: boolean;
-    isCreatingPlaylist: boolean;
-    playlistUrl: string | null;
-    trackCount: number;
-    notification: string | null;
-    playError: string | null;
     isOpen?: boolean;
-    onlogin?: () => void;
-    onlogout?: () => void;
-    onweekchange?: (week: number) => void;
-    onyearrangechange?: (range: [number, number]) => void;
-    onfetch?: () => void;
-    oncreate?: () => void;
-    onopenplaylist?: () => void;
-    onclose?: () => void;
   }
 
   let {
-    isAuthenticated,
-    user,
-    week = $bindable(),
     currentWeek,
-    yearRange = $bindable(),
     yearBounds,
-    playlistName,
-    isGenerating,
-    isPreparing,
-    progress,
-    fetchStats,
-    songsReady,
-    isCreatingPlaylist,
-    playlistUrl,
-    trackCount,
-    notification,
-    playError,
-    isOpen = false,
-    onlogin,
-    onlogout,
-    onweekchange,
-    onyearrangechange,
-    onfetch,
-    oncreate,
-    onopenplaylist,
-    onclose,
+    isOpen = $bindable(false),
   }: Props = $props();
+
+  const ops = getOps();
+  const auth = getAuth();
+
+  function getRandomYearRange(min: number, max: number, minGap = 10): [number, number] {
+    const maxStart = max - minGap;
+    const start = Math.floor(Math.random() * (maxStart - min + 1)) + min;
+    const end = start + minGap + Math.floor(Math.random() * (max - start - minGap + 1));
+    return [start, end];
+  }
+
+  let week = $state(currentWeek);
+  let yearRange = $state<[number, number]>(getRandomYearRange(yearBounds.min, yearBounds.max));
+
+  const playlistName = $derived(
+    `BFTP${week.toString().padStart(2, "0")}${(yearRange[0] % 100).toString().padStart(2, "0")}-${(yearRange[1] % 100).toString().padStart(2, "0")}`,
+  );
+
+  async function handleFetch() {
+    await ops.fetchSongs(week, yearRange);
+    if (window.innerWidth < 768) isOpen = false;
+  }
+
+  async function handleCreate() {
+    await ops.createPlaylist(playlistName, week, yearRange);
+  }
 </script>
 
-<!-- Mobile overlay -->
 {#if isOpen}
   <button
     class="fixed inset-0 z-40 bg-black/50 md:hidden"
-    onclick={onclose}
+    onclick={() => (isOpen = false)}
     aria-label="Close sidebar"
   ></button>
 {/if}
 
-<!-- Sidebar -->
 <aside
   class="fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 flex-col border-r border-border bg-card p-4
 		transition-transform duration-200 ease-in-out md:static md:translate-x-0
 		{isOpen ? 'translate-x-0' : '-translate-x-full'}"
 >
-  <!-- Header with Logo and Close Button -->
   <div class="mb-6 flex items-center justify-between">
     <h1 class="text-lg font-bold">
       <span class="text-spotify">Blast</span> from the
       <span class="text-spotify">Past</span>
     </h1>
-    <!-- Mobile close button -->
     <button
       class="flex h-8 w-8 items-center justify-center rounded-md hover:bg-secondary md:hidden"
-      onclick={onclose}
+      onclick={() => (isOpen = false)}
       aria-label="Close menu"
     >
       <svg
@@ -108,43 +85,28 @@
     </button>
   </div>
 
-  {#if isAuthenticated && user}
-    <UserBadge {user} {onlogout} />
-  {/if}
+  <UserBadge />
 
   <WeekPicker
     bind:value={week}
     {currentWeek}
-    onchange={onweekchange}
-    onenter={onfetch}
+    onenter={handleFetch}
   />
 
   <YearRangeSlider
     bind:value={yearRange}
     min={yearBounds.min}
     max={yearBounds.max}
-    onchange={onyearrangechange}
   />
 
   <PlaylistControls
-    {isAuthenticated}
     {playlistName}
-    {isGenerating}
-    {isPreparing}
-    {progress}
-    {fetchStats}
-    {songsReady}
-    {isCreatingPlaylist}
-    {playlistUrl}
-    {trackCount}
-    {onfetch}
-    {oncreate}
-    {onopenplaylist}
-    {onlogin}
+    onfetch={handleFetch}
+    oncreate={handleCreate}
   />
 
-  <Toast message={notification} variant="success" />
-  <Toast message={playError} variant="error" />
+  <Toast message={ops.notification} variant="success" />
+  <Toast message={ops.playError} variant="error" />
 
   <div class="flex-1"></div>
 
@@ -164,11 +126,10 @@
     </div>
   {/if}
 
-  <!-- Footer -->
   <div class="flex items-center justify-between text-xs text-muted-foreground">
     <span>Data: 1958–2026</span>
-    {#if !isAuthenticated}
-      <button class="text-spotify hover:underline" onclick={onlogin}>
+    {#if !auth.isAuthenticated}
+      <button class="text-spotify hover:underline" onclick={() => (window.location.href = "/api/auth/login")}>
         Login
       </button>
     {/if}

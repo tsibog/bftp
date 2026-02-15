@@ -1,33 +1,28 @@
 <script lang="ts">
-	import type { User } from "$lib/types";
+	import { getAuth } from "$lib/context";
 
-	interface Props {
-		user: User;
-		onlogout?: () => void;
-	}
+	const auth = getAuth();
 
-	let { user, onlogout }: Props = $props();
-
-	const initial = $derived(user.name?.charAt(0).toUpperCase() || "U");
+	const initial = $derived(auth.user?.name?.charAt(0).toUpperCase() || "U");
 </script>
 
-<div class="mb-4 flex items-center gap-2">
-	{#if user.image}
-		<img src={user.image} alt="" class="h-6 w-6 rounded-full" />
-	{:else}
-		<div
-			class="flex h-6 w-6 items-center justify-center rounded-full bg-spotify text-xs font-bold text-black"
-		>
-			{initial}
-		</div>
-	{/if}
-	<span class="flex-1 truncate text-sm">{user.name}</span>
-	{#if onlogout}
+{#if auth.isAuthenticated && auth.user}
+	<div class="mb-4 flex items-center gap-2">
+		{#if auth.user.image}
+			<img src={auth.user.image} alt="" class="h-6 w-6 rounded-full" />
+		{:else}
+			<div
+				class="flex h-6 w-6 items-center justify-center rounded-full bg-spotify text-xs font-bold text-black"
+			>
+				{initial}
+			</div>
+		{/if}
+		<span class="flex-1 truncate text-sm">{auth.user.name}</span>
 		<button
-			onclick={onlogout}
+			onclick={() => (window.location.href = "/api/auth/logout")}
 			class="text-xs text-muted-foreground hover:text-foreground"
 		>
 			×
 		</button>
-	{/if}
-</div>
+	</div>
+{/if}
