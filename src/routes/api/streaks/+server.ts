@@ -5,8 +5,7 @@ import {
 	cacheStreaks,
 	type StreakLookup,
 } from '$lib/cache';
-import { calculateTop5Streak } from '$lib/billboard';
-import { createChartFetcher } from '$lib/server/chart-loader';
+import { calculateTop5Streak, type BillboardChart } from '$lib/billboard';
 import validDates from '$lib/data/valid_dates.json';
 import { createBadRequestError } from '$lib/utils/error-responses';
 import type { RequestHandler } from './$types';
@@ -49,13 +48,23 @@ export const POST: RequestHandler = async ({ request, fetch: svelteKitFetch }) =
 		createBadRequestError('Missing or empty songs array');
 	}
 
-	// Reads chart data from disk (dev / Node hosting) with fallback to
-	// fetch (Vercel). Module-level memory cache means repeated dates
-	// across requests are instant — no I/O at all.
-	const fetchChart = createChartFetcher(svelteKitFetch);
+	// Request-scoped dedup: when multiple songs from the same chart date
+	// check the same neighboring date, only one fetch is made.
+	const inflight = new Map<string, Promise<BillboardChart | null>>();
+	const fetchChart = (date: string) => {
+		if (!inflight.has(date)) {
+			inflight.set(
+				date,
+				svelteKitFetch(`/billboard/date/${date}.json`)
+					.then((res) => (res.ok ? (res.json() as Promise<BillboardChart>) : null))
+					.catch(() => null)
+			);
+		}
+		return inflight.get(date)!;
+	};
 
 	// Calculate streaks in parallel — songs from the same chart date
-	// automatically share cached chart fetches.
+	// automatically share cached chart fetches via the inflight map.
 	const results = await Promise.all(
 		songs.map(async (song) => {
 			const weeks = await calculateTop5Streak(
