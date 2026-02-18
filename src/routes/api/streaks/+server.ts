@@ -1,5 +1,16 @@
 import { json } from '@sveltejs/kit';
-import { getRedis, getStreaksFromCache, cacheStreaks, type StreakLookup, type StreakEntry } from '$lib/cache';
+import {
+	getRedis,
+	getStreaksFromCache,
+	cacheStreaks,
+	type StreakLookup,
+} from '$lib/cache';
+import {
+	calculateTop5Streak,
+	type BillboardChart,
+	type ChartFetcher,
+} from '$lib/billboard';
+import validDates from '$lib/data/valid_dates.json';
 import { createBadRequestError } from '$lib/utils/error-responses';
 import type { RequestHandler } from './$types';
 
@@ -33,17 +44,62 @@ export const GET: RequestHandler = async ({ url }) => {
 	return json(result);
 };
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, fetch: svelteKitFetch }) => {
 	const body = await request.json();
-	const { streaks } = body as { streaks: StreakEntry[] };
+	const { songs } = body as { songs: StreakLookup[] };
 
-	if (!streaks || !Array.isArray(streaks) || streaks.length === 0) {
-		createBadRequestError('Missing or empty streaks array');
+	if (!songs || !Array.isArray(songs) || songs.length === 0) {
+		createBadRequestError('Missing or empty songs array');
 	}
 
-	await cacheStreaks(streaks);
+	// In-memory chart cache scoped to this request — each chart date
+	// is fetched at most once, even when multiple songs share neighbors.
+	const chartCache = new Map<string, Promise<BillboardChart | null>>();
 
-	return json({ success: true });
+	const fetchChart: ChartFetcher = (date: string) => {
+		if (!chartCache.has(date)) {
+			chartCache.set(
+				date,
+				svelteKitFetch(`/billboard/date/${date}.json`)
+					.then((res) => (res.ok ? (res.json() as Promise<BillboardChart>) : null))
+					.catch(() => null)
+			);
+		}
+		return chartCache.get(date)!;
+	};
+
+	// Calculate streaks in parallel — songs from the same chart date
+	// automatically share cached chart fetches.
+	const results = await Promise.all(
+		songs.map(async (song) => {
+			const weeks = await calculateTop5Streak(
+				song.song,
+				song.artist,
+				song.chartDate,
+				validDates,
+				fetchChart
+			);
+			return { ...song, weeks };
+		})
+	);
+
+	// Cache all calculated streaks in Redis
+	await cacheStreaks(
+		results.map((r) => ({
+			chartDate: r.chartDate,
+			song: r.song,
+			artist: r.artist,
+			weeks: r.weeks,
+		}))
+	);
+
+	// Build response keyed the same way the client expects
+	const response: Record<string, { before: number; after: number }> = {};
+	for (const r of results) {
+		response[`${r.chartDate}:${r.song}:${r.artist}`] = r.weeks;
+	}
+
+	return json(response);
 };
 
 export const DELETE: RequestHandler = async () => {

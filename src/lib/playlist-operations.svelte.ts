@@ -1,5 +1,4 @@
 import {
-	calculateTop5Streak,
 	getChartDatesForWeek,
 	getPositionChange,
 	type BillboardChart,
@@ -89,28 +88,37 @@ export class PlaylistOperations {
 				weeksInTop5: { before: number; after: number };
 			}[] = [];
 
-			for (const [year, chartDate] of chartDates) {
-				try {
-					const res = await fetch(`/billboard/date/${chartDate}.json`);
-					if (!res.ok) continue;
-
-					const chart: BillboardChart = await res.json();
-					const top5 = chart.data.slice(0, 5);
-
-					for (const entry of top5) {
-						chartSongs.push({
-							year,
-							chartDate,
-							song: entry.song,
-							artist: entry.artist,
-							position: entry.this_week,
-							lastWeekPosition: entry.last_week,
-							positionChange: getPositionChange(entry.this_week, entry.last_week),
-							weeksInTop5: { before: 1, after: 0 },
-						});
+			// Fetch all chart dates in parallel
+			const chartEntries = Array.from(chartDates.entries());
+			const charts = await Promise.all(
+				chartEntries.map(async ([year, chartDate]) => {
+					try {
+						const res = await fetch(`/billboard/date/${chartDate}.json`);
+						if (!res.ok) return null;
+						const chart: BillboardChart = await res.json();
+						return { year, chartDate, chart };
+					} catch {
+						return null;
 					}
-				} catch {
-					continue;
+				})
+			);
+
+			for (const entry of charts) {
+				if (!entry) continue;
+				const { year, chartDate, chart } = entry;
+				const top5 = chart.data.slice(0, 5);
+
+				for (const song of top5) {
+					chartSongs.push({
+						year,
+						chartDate,
+						song: song.song,
+						artist: song.artist,
+						position: song.this_week,
+						lastWeekPosition: song.last_week,
+						positionChange: getPositionChange(song.this_week, song.last_week),
+						weeksInTop5: { before: 1, after: 0 },
+					});
 				}
 			}
 
@@ -119,6 +127,7 @@ export class PlaylistOperations {
 				return;
 			}
 
+			// Check Redis cache for pre-calculated streaks
 			const streakLookup = chartSongs.map((s) => ({
 				chartDate: s.chartDate,
 				song: s.song,
@@ -132,45 +141,39 @@ export class PlaylistOperations {
 				? await streakRes.json()
 				: {};
 
-			const streaksToCache: {
-				chartDate: string;
-				song: string;
-				artist: string;
-				weeks: { before: number; after: number };
-			}[] = [];
-
+			// Apply cached streaks
+			const uncachedSongs: { chartDate: string; song: string; artist: string }[] = [];
 			for (const song of chartSongs) {
 				const key = `${song.chartDate}:${song.song}:${song.artist}`;
 				if (cachedStreaks[key] !== undefined) {
 					song.weeksInTop5 = cachedStreaks[key];
 				} else {
-					const weeks = await calculateTop5Streak(
-						song.song,
-						song.artist,
-						song.chartDate,
-						validDates,
-						async (date) => {
-							const res = await fetch(`/billboard/date/${date}.json`);
-							if (!res.ok) return null;
-							return res.json();
-						}
-					);
-					song.weeksInTop5 = weeks;
-					streaksToCache.push({
+					uncachedSongs.push({
 						chartDate: song.chartDate,
 						song: song.song,
 						artist: song.artist,
-						weeks,
 					});
 				}
 			}
 
-			if (streaksToCache.length > 0) {
-				await fetch('/api/streaks', {
+			// Calculate uncached streaks on the server (not client-side)
+			if (uncachedSongs.length > 0) {
+				const calcRes = await fetch('/api/streaks', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ streaks: streaksToCache }),
+					body: JSON.stringify({ songs: uncachedSongs }),
 				});
+
+				if (calcRes.ok) {
+					const calculated: Record<string, { before: number; after: number }> =
+						await calcRes.json();
+					for (const song of chartSongs) {
+						const key = `${song.chartDate}:${song.song}:${song.artist}`;
+						if (calculated[key]) {
+							song.weeksInTop5 = calculated[key];
+						}
+					}
+				}
 			}
 
 			const response = await fetch('/api/playlist', {

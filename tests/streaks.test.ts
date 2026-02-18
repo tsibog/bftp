@@ -1,13 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GET, POST } from '../src/routes/api/streaks/+server';
 import * as cache from '$lib/cache';
+import * as billboard from '$lib/billboard';
 
 vi.mock('$lib/cache', () => ({
 	getStreaksFromCache: vi.fn(),
 	cacheStreaks: vi.fn()
 }));
 
-function createMockEvent(url: string, request: Request): any {
+vi.mock('$lib/billboard', () => ({
+	calculateTop5Streak: vi.fn()
+}));
+
+vi.mock('$lib/data/valid_dates.json', () => ({
+	default: ['2024-01-01', '2024-01-08', '2024-01-15']
+}));
+
+function createMockEvent(url: string, request: Request, fetchFn?: typeof globalThis.fetch): any {
 	return {
 		url: new URL(url),
 		request,
@@ -15,7 +24,7 @@ function createMockEvent(url: string, request: Request): any {
 		params: {},
 		route: { id: '/api/streaks' },
 		isDataRequest: false,
-		fetch: globalThis.fetch,
+		fetch: fetchFn ?? globalThis.fetch,
 		getClientAddress: () => '127.0.0.1',
 		requestId: 'test-request-id',
 		setHeaders: () => {},
@@ -57,7 +66,7 @@ describe('GET /api/streaks', () => {
 	it('returns 400 when songs parameter is missing', async () => {
 		const url = 'http://localhost/api/streaks';
 		const request = new Request(url);
-		
+
 		try {
 			await GET(createMockEvent(url, request));
 			expect.fail('Should have thrown');
@@ -69,7 +78,7 @@ describe('GET /api/streaks', () => {
 	it('returns 400 when songs is not an array', async () => {
 		const url = `http://localhost/api/streaks?songs=${encodeURIComponent(JSON.stringify({}))}`;
 		const request = new Request(url);
-		
+
 		try {
 			await GET(createMockEvent(url, request));
 			expect.fail('Should have thrown');
@@ -81,7 +90,7 @@ describe('GET /api/streaks', () => {
 	it('returns 400 when songs JSON is invalid', async () => {
 		const url = 'http://localhost/api/streaks?songs=invalid-json';
 		const request = new Request(url);
-		
+
 		try {
 			await GET(createMockEvent(url, request));
 			expect.fail('Should have thrown');
@@ -116,33 +125,74 @@ describe('POST /api/streaks', () => {
 		vi.clearAllMocks();
 	});
 
-	it('caches streaks successfully', async () => {
-		const streaks = [
-			{ chartDate: '2024-01-01', song: 'Test Song', artist: 'Test Artist', weeks: { before: 3, after: 2 } }
+	it('calculates streaks server-side and caches them', async () => {
+		const songs = [
+			{ chartDate: '2024-01-01', song: 'Test Song', artist: 'Test Artist' }
 		];
-		
+
+		vi.mocked(billboard.calculateTop5Streak).mockResolvedValue({ before: 3, after: 2 });
 		vi.mocked(cache.cacheStreaks).mockResolvedValue(undefined);
 
 		const url = 'http://localhost/api/streaks';
 		const request = new Request(url, {
 			method: 'POST',
-			body: JSON.stringify({ streaks })
+			body: JSON.stringify({ songs })
 		});
-		
-		const response = await POST(createMockEvent(url, request));
+
+		const mockFetch = vi.fn();
+		const response = await POST(createMockEvent(url, request, mockFetch));
 		const data = await response.json();
 
-		expect(data).toEqual({ success: true });
-		expect(cache.cacheStreaks).toHaveBeenCalledWith(streaks);
+		expect(data).toEqual({
+			'2024-01-01:Test Song:Test Artist': { before: 3, after: 2 }
+		});
+		expect(billboard.calculateTop5Streak).toHaveBeenCalledWith(
+			'Test Song',
+			'Test Artist',
+			'2024-01-01',
+			['2024-01-01', '2024-01-08', '2024-01-15'],
+			expect.any(Function)
+		);
+		expect(cache.cacheStreaks).toHaveBeenCalledWith([
+			{ chartDate: '2024-01-01', song: 'Test Song', artist: 'Test Artist', weeks: { before: 3, after: 2 } }
+		]);
 	});
 
-	it('returns 400 when streaks array is missing', async () => {
+	it('calculates streaks for multiple songs in parallel', async () => {
+		const songs = [
+			{ chartDate: '2024-01-01', song: 'Song A', artist: 'Artist A' },
+			{ chartDate: '2024-01-01', song: 'Song B', artist: 'Artist B' }
+		];
+
+		vi.mocked(billboard.calculateTop5Streak)
+			.mockResolvedValueOnce({ before: 2, after: 1 })
+			.mockResolvedValueOnce({ before: 5, after: 3 });
+		vi.mocked(cache.cacheStreaks).mockResolvedValue(undefined);
+
+		const url = 'http://localhost/api/streaks';
+		const request = new Request(url, {
+			method: 'POST',
+			body: JSON.stringify({ songs })
+		});
+
+		const mockFetch = vi.fn();
+		const response = await POST(createMockEvent(url, request, mockFetch));
+		const data = await response.json();
+
+		expect(data).toEqual({
+			'2024-01-01:Song A:Artist A': { before: 2, after: 1 },
+			'2024-01-01:Song B:Artist B': { before: 5, after: 3 }
+		});
+		expect(billboard.calculateTop5Streak).toHaveBeenCalledTimes(2);
+	});
+
+	it('returns 400 when songs array is missing', async () => {
 		const url = 'http://localhost/api/streaks';
 		const request = new Request(url, {
 			method: 'POST',
 			body: JSON.stringify({})
 		});
-		
+
 		try {
 			await POST(createMockEvent(url, request));
 			expect.fail('Should have thrown');
@@ -151,13 +201,13 @@ describe('POST /api/streaks', () => {
 		}
 	});
 
-	it('returns 400 when streaks is not an array', async () => {
+	it('returns 400 when songs is not an array', async () => {
 		const url = 'http://localhost/api/streaks';
 		const request = new Request(url, {
 			method: 'POST',
-			body: JSON.stringify({ streaks: 'not-an-array' })
+			body: JSON.stringify({ songs: 'not-an-array' })
 		});
-		
+
 		try {
 			await POST(createMockEvent(url, request));
 			expect.fail('Should have thrown');
@@ -166,13 +216,13 @@ describe('POST /api/streaks', () => {
 		}
 	});
 
-	it('returns 400 when streaks array is empty', async () => {
+	it('returns 400 when songs array is empty', async () => {
 		const url = 'http://localhost/api/streaks';
 		const request = new Request(url, {
 			method: 'POST',
-			body: JSON.stringify({ streaks: [] })
+			body: JSON.stringify({ songs: [] })
 		});
-		
+
 		try {
 			await POST(createMockEvent(url, request));
 			expect.fail('Should have thrown');
