@@ -12,6 +12,10 @@ vi.mock('$lib/billboard', () => ({
 	calculateTop5Streak: vi.fn()
 }));
 
+vi.mock('$lib/server/chart-loader', () => ({
+	createChartFetcher: vi.fn(() => vi.fn())
+}));
+
 vi.mock('$lib/data/valid_dates.json', () => ({
 	default: ['2024-01-01', '2024-01-08', '2024-01-15']
 }));
