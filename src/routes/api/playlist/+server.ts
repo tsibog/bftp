@@ -17,6 +17,24 @@ import {
 import validDates from '$lib/data/valid_dates.json';
 import type { RequestHandler } from './$types';
 
+// Vite resolves this at build time — chart data is bundled into the
+// server function directly. No HTTP self-fetch, no auth issues.
+const chartModules = import.meta.glob<BillboardChart>(
+	'/static/billboard/date/*.json',
+	{ import: 'default' }
+);
+
+async function loadChart(date: string): Promise<BillboardChart | null> {
+	const key = `/static/billboard/date/${date}.json`;
+	const loader = chartModules[key];
+	if (!loader) return null;
+	try {
+		return await loader();
+	} catch {
+		return null;
+	}
+}
+
 interface ChartSong {
 	year: number;
 	chartDate: string;
@@ -28,7 +46,7 @@ interface ChartSong {
 	weeksInTop5: { before: number; after: number };
 }
 
-export const POST: RequestHandler = async ({ request, fetch: svelteKitFetch }) => {
+export const POST: RequestHandler = async ({ request }) => {
 	let accessToken: string;
 	try {
 		accessToken = await getClientCredentialsToken();
@@ -45,7 +63,7 @@ export const POST: RequestHandler = async ({ request, fetch: svelteKitFetch }) =
 
 	const [startYear, endYear] = yearRange;
 
-	// --- Phase 1: Fetch chart data ---
+	// --- Phase 1: Load chart data (from bundled modules, no HTTP) ---
 	const chartDates = getChartDatesForWeek(week, startYear, endYear, validDates);
 
 	if (chartDates.size === 0) {
@@ -53,21 +71,10 @@ export const POST: RequestHandler = async ({ request, fetch: svelteKitFetch }) =
 	}
 
 	const chartEntries = Array.from(chartDates.entries());
-	const fetchErrors: string[] = [];
 	const charts = await Promise.all(
 		chartEntries.map(async ([year, chartDate]) => {
-			try {
-				const res = await svelteKitFetch(`/billboard/date/${chartDate}.json`);
-				if (!res.ok) {
-					fetchErrors.push(`${chartDate}: HTTP ${res.status}`);
-					return null;
-				}
-				const chart: BillboardChart = await res.json();
-				return { year, chartDate, chart };
-			} catch (e) {
-				fetchErrors.push(`${chartDate}: ${e instanceof Error ? e.message : String(e)}`);
-				return null;
-			}
+			const chart = await loadChart(chartDate);
+			return chart ? { year, chartDate, chart } : null;
 		})
 	);
 
@@ -92,17 +99,13 @@ export const POST: RequestHandler = async ({ request, fetch: svelteKitFetch }) =
 	}
 
 	if (chartSongs.length === 0) {
-		throw error(400, `No songs found in chart data. Fetch errors: ${fetchErrors.join('; ') || 'none (charts were empty)'}`);
+		throw error(400, 'No songs found in chart data');
 	}
 
 	// --- Phase 2: Resolve streaks (Redis cache → compute uncached) ---
-	const streakLookup = chartSongs.map((s) => ({
-		chartDate: s.chartDate,
-		song: s.song,
-		artist: s.artist,
-	}));
-
-	const cachedStreaks = await getStreaksFromCache(streakLookup);
+	const cachedStreaks = await getStreaksFromCache(
+		chartSongs.map((s) => ({ chartDate: s.chartDate, song: s.song, artist: s.artist }))
+	);
 
 	const uncachedSongs: { chartDate: string; song: string; artist: string }[] = [];
 	for (const song of chartSongs) {
@@ -115,15 +118,11 @@ export const POST: RequestHandler = async ({ request, fetch: svelteKitFetch }) =
 	}
 
 	if (uncachedSongs.length > 0) {
+		// Dedup chart loads across parallel streak calculations
 		const inflight = new Map<string, Promise<BillboardChart | null>>();
 		const fetchChart = (date: string) => {
 			if (!inflight.has(date)) {
-				inflight.set(
-					date,
-					svelteKitFetch(`/billboard/date/${date}.json`)
-						.then((res) => (res.ok ? (res.json() as Promise<BillboardChart>) : null))
-						.catch(() => null)
-				);
+				inflight.set(date, loadChart(date));
 			}
 			return inflight.get(date)!;
 		};
