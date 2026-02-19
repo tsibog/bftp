@@ -53,14 +53,19 @@ export const POST: RequestHandler = async ({ request, fetch: svelteKitFetch }) =
 	}
 
 	const chartEntries = Array.from(chartDates.entries());
+	const fetchErrors: string[] = [];
 	const charts = await Promise.all(
 		chartEntries.map(async ([year, chartDate]) => {
 			try {
 				const res = await svelteKitFetch(`/billboard/date/${chartDate}.json`);
-				if (!res.ok) return null;
+				if (!res.ok) {
+					fetchErrors.push(`${chartDate}: HTTP ${res.status}`);
+					return null;
+				}
 				const chart: BillboardChart = await res.json();
 				return { year, chartDate, chart };
-			} catch {
+			} catch (e) {
+				fetchErrors.push(`${chartDate}: ${e instanceof Error ? e.message : String(e)}`);
 				return null;
 			}
 		})
@@ -87,7 +92,7 @@ export const POST: RequestHandler = async ({ request, fetch: svelteKitFetch }) =
 	}
 
 	if (chartSongs.length === 0) {
-		throw error(400, 'No songs found in chart data');
+		throw error(400, `No songs found in chart data. Fetch errors: ${fetchErrors.join('; ') || 'none (charts were empty)'}`);
 	}
 
 	// --- Phase 2: Resolve streaks (Redis cache → compute uncached) ---
