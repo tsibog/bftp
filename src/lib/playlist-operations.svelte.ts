@@ -1,9 +1,3 @@
-import {
-	getChartDatesForWeek,
-	getPositionChange,
-	type BillboardChart,
-} from '$lib/billboard';
-import validDates from '$lib/data/valid_dates.json';
 import type { FetchStats, Progress, Song } from '$lib/types';
 
 export class PlaylistOperations {
@@ -75,111 +69,12 @@ export class PlaylistOperations {
 		this.songsReady = false;
 
 		try {
-			const chartDates = getChartDatesForWeek(week, yearRange[0], yearRange[1], validDates);
-
-			const chartSongs: {
-				year: number;
-				chartDate: string;
-				song: string;
-				artist: string;
-				position: number;
-				lastWeekPosition: number | null;
-				positionChange: 'up' | 'down' | 'same' | 'new';
-				weeksInTop5: { before: number; after: number };
-			}[] = [];
-
-			// Fetch all chart dates in parallel
-			const chartEntries = Array.from(chartDates.entries());
-			const charts = await Promise.all(
-				chartEntries.map(async ([year, chartDate]) => {
-					try {
-						const res = await fetch(`/billboard/date/${chartDate}.json`);
-						if (!res.ok) return null;
-						const chart: BillboardChart = await res.json();
-						return { year, chartDate, chart };
-					} catch {
-						return null;
-					}
-				})
-			);
-
-			for (const entry of charts) {
-				if (!entry) continue;
-				const { year, chartDate, chart } = entry;
-				const top5 = chart.data.slice(0, 5);
-
-				for (const song of top5) {
-					chartSongs.push({
-						year,
-						chartDate,
-						song: song.song,
-						artist: song.artist,
-						position: song.this_week,
-						lastWeekPosition: song.last_week,
-						positionChange: getPositionChange(song.this_week, song.last_week),
-						weeksInTop5: { before: 1, after: 0 },
-					});
-				}
-			}
-
-			if (chartSongs.length === 0) {
-				this.showError('No chart data found for the selected week and years');
-				return;
-			}
-
-			// Check Redis cache for pre-calculated streaks
-			const streakLookup = chartSongs.map((s) => ({
-				chartDate: s.chartDate,
-				song: s.song,
-				artist: s.artist,
-			}));
-
-			const streakRes = await fetch(
-				`/api/streaks?songs=${encodeURIComponent(JSON.stringify(streakLookup))}`
-			);
-			const cachedStreaks: Record<string, { before: number; after: number }> = streakRes.ok
-				? await streakRes.json()
-				: {};
-
-			// Apply cached streaks
-			const uncachedSongs: { chartDate: string; song: string; artist: string }[] = [];
-			for (const song of chartSongs) {
-				const key = `${song.chartDate}:${song.song}:${song.artist}`;
-				if (cachedStreaks[key] !== undefined) {
-					song.weeksInTop5 = cachedStreaks[key];
-				} else {
-					uncachedSongs.push({
-						chartDate: song.chartDate,
-						song: song.song,
-						artist: song.artist,
-					});
-				}
-			}
-
-			// Calculate uncached streaks on the server (not client-side)
-			if (uncachedSongs.length > 0) {
-				const calcRes = await fetch('/api/streaks', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ songs: uncachedSongs }),
-				});
-
-				if (calcRes.ok) {
-					const calculated: Record<string, { before: number; after: number }> =
-						await calcRes.json();
-					for (const song of chartSongs) {
-						const key = `${song.chartDate}:${song.song}:${song.artist}`;
-						if (calculated[key]) {
-							song.weeksInTop5 = calculated[key];
-						}
-					}
-				}
-			}
-
+			// Single request — server fetches charts, calculates streaks,
+			// searches Spotify, and streams everything back via SSE.
 			const response = await fetch('/api/playlist', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ songs: chartSongs }),
+				body: JSON.stringify({ week, yearRange }),
 			});
 
 			if (!response.ok) throw new Error(`HTTP ${response.status}`);

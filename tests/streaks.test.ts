@@ -1,30 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { GET, POST } from '../src/routes/api/streaks/+server';
-import * as cache from '$lib/cache';
-import * as billboard from '$lib/billboard';
+import { DELETE } from '../src/routes/api/streaks/+server';
+import {
+	calculateTop5Streak,
+	getPreviousChartDates,
+	getSameYearFutureDates,
+} from '$lib/billboard';
+import type { BillboardChart, ChartFetcher } from '$lib/billboard';
 
-vi.mock('$lib/cache', () => ({
-	getStreaksFromCache: vi.fn(),
-	cacheStreaks: vi.fn()
-}));
-
-vi.mock('$lib/billboard', () => ({
-	calculateTop5Streak: vi.fn()
-}));
-
-vi.mock('$lib/data/valid_dates.json', () => ({
-	default: ['2024-01-01', '2024-01-08', '2024-01-15']
-}));
-
-function createMockEvent(url: string, request: Request, fetchFn?: typeof globalThis.fetch): any {
+function createMockEvent(): any {
 	return {
-		url: new URL(url),
-		request,
+		url: new URL('http://localhost/api/streaks'),
+		request: new Request('http://localhost/api/streaks', { method: 'DELETE' }),
 		locals: {},
 		params: {},
 		route: { id: '/api/streaks' },
 		isDataRequest: false,
-		fetch: fetchFn ?? globalThis.fetch,
+		fetch: globalThis.fetch,
 		getClientAddress: () => '127.0.0.1',
 		requestId: 'test-request-id',
 		setHeaders: () => {},
@@ -36,198 +27,164 @@ function createMockEvent(url: string, request: Request, fetchFn?: typeof globalT
 			get: () => undefined,
 			set: () => {},
 			delete: () => {},
-			serialize: () => ''
-		}
+			serialize: () => '',
+		},
 	};
 }
 
-describe('GET /api/streaks', () => {
+vi.mock('$lib/cache', () => ({
+	getRedis: vi.fn(() => null),
+}));
+
+describe('DELETE /api/streaks', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 	});
 
-	it('returns cached streaks when songs parameter is provided', async () => {
-		const songs = [
-			{ chartDate: '2024-01-01', song: 'Test Song', artist: 'Test Artist' }
-		];
-		const cachedStreaks = { '2024-01-01:Test Song:Test Artist': { before: 3, after: 2 } };
-
-		vi.mocked(cache.getStreaksFromCache).mockResolvedValue(cachedStreaks);
-
-		const url = `http://localhost/api/streaks?songs=${encodeURIComponent(JSON.stringify(songs))}`;
-		const request = new Request(url);
-		const response = await GET(createMockEvent(url, request));
+	it('returns failure when Redis is not configured', async () => {
+		const response = await DELETE(createMockEvent());
 		const data = await response.json();
 
-		expect(data).toEqual(cachedStreaks);
-		expect(cache.getStreaksFromCache).toHaveBeenCalledWith(songs);
-	});
-
-	it('returns 400 when songs parameter is missing', async () => {
-		const url = 'http://localhost/api/streaks';
-		const request = new Request(url);
-
-		try {
-			await GET(createMockEvent(url, request));
-			expect.fail('Should have thrown');
-		} catch (e: unknown) {
-			expect(e).toMatchObject({ status: 400 });
-		}
-	});
-
-	it('returns 400 when songs is not an array', async () => {
-		const url = `http://localhost/api/streaks?songs=${encodeURIComponent(JSON.stringify({}))}`;
-		const request = new Request(url);
-
-		try {
-			await GET(createMockEvent(url, request));
-			expect.fail('Should have thrown');
-		} catch (e: unknown) {
-			expect(e).toMatchObject({ status: 400 });
-		}
-	});
-
-	it('returns 400 when songs JSON is invalid', async () => {
-		const url = 'http://localhost/api/streaks?songs=invalid-json';
-		const request = new Request(url);
-
-		try {
-			await GET(createMockEvent(url, request));
-			expect.fail('Should have thrown');
-		} catch (e: unknown) {
-			expect(e).toMatchObject({ status: 400 });
-		}
-	});
-
-	it('filters out null values from cached streaks', async () => {
-		const songs = [
-			{ chartDate: '2024-01-01', song: 'Cached Song', artist: 'Artist' },
-			{ chartDate: '2024-01-01', song: 'Uncached Song', artist: 'Artist' }
-		];
-		const cachedStreaks = {
-			'2024-01-01:Cached Song:Artist': { before: 2, after: 1 },
-			'2024-01-01:Uncached Song:Artist': null
-		};
-
-		vi.mocked(cache.getStreaksFromCache).mockResolvedValue(cachedStreaks);
-
-		const url = `http://localhost/api/streaks?songs=${encodeURIComponent(JSON.stringify(songs))}`;
-		const request = new Request(url);
-		const response = await GET(createMockEvent(url, request));
-		const data = await response.json();
-
-		expect(data).toEqual({ '2024-01-01:Cached Song:Artist': { before: 2, after: 1 } });
+		expect(data).toEqual({ success: false, message: 'Redis not configured' });
 	});
 });
 
-describe('POST /api/streaks', () => {
-	beforeEach(() => {
-		vi.clearAllMocks();
+describe('getPreviousChartDates', () => {
+	const dates = ['2024-01-01', '2024-01-08', '2024-01-15', '2024-01-22', '2024-01-29'];
+
+	it('returns dates before the current date in reverse order', () => {
+		const result = getPreviousChartDates('2024-01-22', dates);
+		expect(result).toEqual(['2024-01-15', '2024-01-08', '2024-01-01']);
 	});
 
-	it('calculates streaks server-side and caches them', async () => {
-		const songs = [
-			{ chartDate: '2024-01-01', song: 'Test Song', artist: 'Test Artist' }
-		];
+	it('returns empty array for the first date', () => {
+		expect(getPreviousChartDates('2024-01-01', dates)).toEqual([]);
+	});
 
-		vi.mocked(billboard.calculateTop5Streak).mockResolvedValue({ before: 3, after: 2 });
-		vi.mocked(cache.cacheStreaks).mockResolvedValue(undefined);
+	it('respects maxCount', () => {
+		const result = getPreviousChartDates('2024-01-29', dates, 2);
+		expect(result).toEqual(['2024-01-22', '2024-01-15']);
+	});
 
-		const url = 'http://localhost/api/streaks';
-		const request = new Request(url, {
-			method: 'POST',
-			body: JSON.stringify({ songs })
+	it('returns empty for unknown date', () => {
+		expect(getPreviousChartDates('2099-01-01', dates)).toEqual([]);
+	});
+});
+
+describe('getSameYearFutureDates', () => {
+	const dates = ['2024-01-01', '2024-01-08', '2024-01-15', '2025-01-01'];
+
+	it('returns future dates within the same year', () => {
+		const result = getSameYearFutureDates('2024-01-01', dates);
+		expect(result).toEqual(['2024-01-08', '2024-01-15']);
+	});
+
+	it('stops at year boundary', () => {
+		const result = getSameYearFutureDates('2024-01-15', dates);
+		expect(result).toEqual([]);
+	});
+
+	it('returns empty for last date', () => {
+		expect(getSameYearFutureDates('2025-01-01', dates)).toEqual([]);
+	});
+});
+
+describe('calculateTop5Streak', () => {
+	const validDates = [
+		'2024-01-01',
+		'2024-01-08',
+		'2024-01-15',
+		'2024-01-22',
+		'2024-01-29',
+	];
+
+	function makeChart(date: string, top5: { song: string; artist: string }[]): BillboardChart {
+		return {
+			date,
+			data: top5.map((s, i) => ({
+				song: s.song,
+				artist: s.artist,
+				this_week: i + 1,
+				last_week: null,
+				peak_position: i + 1,
+				weeks_on_chart: 1,
+			})),
+		};
+	}
+
+	it('returns {before: 1, after: 0} when song only appears on current date', async () => {
+		const fetchChart: ChartFetcher = vi.fn(async (date) => {
+			// Neighboring charts don't have the song
+			return makeChart(date, [
+				{ song: 'Other', artist: 'Other' },
+			]);
 		});
 
-		const mockFetch = vi.fn();
-		const response = await POST(createMockEvent(url, request, mockFetch));
-		const data = await response.json();
-
-		expect(data).toEqual({
-			'2024-01-01:Test Song:Test Artist': { before: 3, after: 2 }
-		});
-		expect(billboard.calculateTop5Streak).toHaveBeenCalledWith(
-			'Test Song',
-			'Test Artist',
-			'2024-01-01',
-			['2024-01-01', '2024-01-08', '2024-01-15'],
-			expect.any(Function)
+		const result = await calculateTop5Streak(
+			'My Song',
+			'My Artist',
+			'2024-01-15',
+			validDates,
+			fetchChart
 		);
-		expect(cache.cacheStreaks).toHaveBeenCalledWith([
-			{ chartDate: '2024-01-01', song: 'Test Song', artist: 'Test Artist', weeks: { before: 3, after: 2 } }
-		]);
+
+		expect(result).toEqual({ before: 1, after: 0 });
 	});
 
-	it('calculates streaks for multiple songs in parallel', async () => {
-		const songs = [
-			{ chartDate: '2024-01-01', song: 'Song A', artist: 'Artist A' },
-			{ chartDate: '2024-01-01', song: 'Song B', artist: 'Artist B' }
-		];
+	it('counts consecutive weeks before current date', async () => {
+		const songInChart = { song: 'Hit Song', artist: 'Star' };
 
-		vi.mocked(billboard.calculateTop5Streak)
-			.mockResolvedValueOnce({ before: 2, after: 1 })
-			.mockResolvedValueOnce({ before: 5, after: 3 });
-		vi.mocked(cache.cacheStreaks).mockResolvedValue(undefined);
-
-		const url = 'http://localhost/api/streaks';
-		const request = new Request(url, {
-			method: 'POST',
-			body: JSON.stringify({ songs })
+		const fetchChart: ChartFetcher = vi.fn(async (date) => {
+			if (date === '2024-01-08' || date === '2024-01-01') {
+				return makeChart(date, [songInChart]);
+			}
+			return makeChart(date, [{ song: 'Other', artist: 'Other' }]);
 		});
 
-		const mockFetch = vi.fn();
-		const response = await POST(createMockEvent(url, request, mockFetch));
-		const data = await response.json();
+		const result = await calculateTop5Streak(
+			'Hit Song',
+			'Star',
+			'2024-01-15',
+			validDates,
+			fetchChart
+		);
 
-		expect(data).toEqual({
-			'2024-01-01:Song A:Artist A': { before: 2, after: 1 },
-			'2024-01-01:Song B:Artist B': { before: 5, after: 3 }
-		});
-		expect(billboard.calculateTop5Streak).toHaveBeenCalledTimes(2);
+		// before = 2 previous weeks + 1 (current) = 3
+		expect(result.before).toBe(3);
 	});
 
-	it('returns 400 when songs array is missing', async () => {
-		const url = 'http://localhost/api/streaks';
-		const request = new Request(url, {
-			method: 'POST',
-			body: JSON.stringify({})
+	it('counts consecutive weeks after current date within same year', async () => {
+		const songInChart = { song: 'Hit Song', artist: 'Star' };
+
+		const fetchChart: ChartFetcher = vi.fn(async (date) => {
+			if (date === '2024-01-22' || date === '2024-01-29') {
+				return makeChart(date, [songInChart]);
+			}
+			return makeChart(date, [{ song: 'Other', artist: 'Other' }]);
 		});
 
-		try {
-			await POST(createMockEvent(url, request));
-			expect.fail('Should have thrown');
-		} catch (e: unknown) {
-			expect(e).toMatchObject({ status: 400 });
-		}
+		const result = await calculateTop5Streak(
+			'Hit Song',
+			'Star',
+			'2024-01-15',
+			validDates,
+			fetchChart
+		);
+
+		expect(result.after).toBe(2);
 	});
 
-	it('returns 400 when songs is not an array', async () => {
-		const url = 'http://localhost/api/streaks';
-		const request = new Request(url, {
-			method: 'POST',
-			body: JSON.stringify({ songs: 'not-an-array' })
-		});
+	it('stops counting when chart fetch fails', async () => {
+		const fetchChart: ChartFetcher = vi.fn(async () => null);
 
-		try {
-			await POST(createMockEvent(url, request));
-			expect.fail('Should have thrown');
-		} catch (e: unknown) {
-			expect(e).toMatchObject({ status: 400 });
-		}
-	});
+		const result = await calculateTop5Streak(
+			'Hit Song',
+			'Star',
+			'2024-01-15',
+			validDates,
+			fetchChart
+		);
 
-	it('returns 400 when songs array is empty', async () => {
-		const url = 'http://localhost/api/streaks';
-		const request = new Request(url, {
-			method: 'POST',
-			body: JSON.stringify({ songs: [] })
-		});
-
-		try {
-			await POST(createMockEvent(url, request));
-			expect.fail('Should have thrown');
-		} catch (e: unknown) {
-			expect(e).toMatchObject({ status: 400 });
-		}
+		expect(result).toEqual({ before: 1, after: 0 });
 	});
 });

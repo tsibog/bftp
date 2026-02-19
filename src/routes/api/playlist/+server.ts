@@ -1,6 +1,20 @@
 import { error } from '@sveltejs/kit';
 import { searchTrack, getClientCredentialsToken } from '$lib/spotify';
-import { getFromCache, addToCache, isNotFoundCached, cacheNotFound } from '$lib/cache';
+import {
+	getFromCache,
+	addToCache,
+	isNotFoundCached,
+	cacheNotFound,
+	getStreaksFromCache,
+	cacheStreaks,
+} from '$lib/cache';
+import {
+	getChartDatesForWeek,
+	getPositionChange,
+	calculateTop5Streak,
+	type BillboardChart,
+} from '$lib/billboard';
+import validDates from '$lib/data/valid_dates.json';
 import type { RequestHandler } from './$types';
 
 interface ChartSong {
@@ -14,8 +28,7 @@ interface ChartSong {
 	weeksInTop5: { before: number; after: number };
 }
 
-export const POST: RequestHandler = async ({ request }) => {
-	// Use Client Credentials token for search (no user login required)
+export const POST: RequestHandler = async ({ request, fetch: svelteKitFetch }) => {
 	let accessToken: string;
 	try {
 		accessToken = await getClientCredentialsToken();
@@ -24,15 +37,119 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	const body = await request.json();
-	const { songs: chartSongs } = body as { songs: ChartSong[] };
+	const { week, yearRange } = body as { week: number; yearRange: [number, number] };
 
-	if (!chartSongs || !Array.isArray(chartSongs) || chartSongs.length === 0) {
-		throw error(400, 'Missing or empty songs array');
+	if (!week || !yearRange || yearRange.length !== 2) {
+		throw error(400, 'Missing week or yearRange');
 	}
 
+	const [startYear, endYear] = yearRange;
+
+	// --- Phase 1: Fetch chart data ---
+	const chartDates = getChartDatesForWeek(week, startYear, endYear, validDates);
+
+	if (chartDates.size === 0) {
+		throw error(400, 'No chart data found for the selected week and years');
+	}
+
+	const chartEntries = Array.from(chartDates.entries());
+	const charts = await Promise.all(
+		chartEntries.map(async ([year, chartDate]) => {
+			try {
+				const res = await svelteKitFetch(`/billboard/date/${chartDate}.json`);
+				if (!res.ok) return null;
+				const chart: BillboardChart = await res.json();
+				return { year, chartDate, chart };
+			} catch {
+				return null;
+			}
+		})
+	);
+
+	const chartSongs: ChartSong[] = [];
+
+	for (const entry of charts) {
+		if (!entry) continue;
+		const { year, chartDate, chart } = entry;
+
+		for (const song of chart.data.slice(0, 5)) {
+			chartSongs.push({
+				year,
+				chartDate,
+				song: song.song,
+				artist: song.artist,
+				position: song.this_week,
+				lastWeekPosition: song.last_week,
+				positionChange: getPositionChange(song.this_week, song.last_week),
+				weeksInTop5: { before: 1, after: 0 },
+			});
+		}
+	}
+
+	if (chartSongs.length === 0) {
+		throw error(400, 'No songs found in chart data');
+	}
+
+	// --- Phase 2: Resolve streaks (Redis cache → compute uncached) ---
+	const streakLookup = chartSongs.map((s) => ({
+		chartDate: s.chartDate,
+		song: s.song,
+		artist: s.artist,
+	}));
+
+	const cachedStreaks = await getStreaksFromCache(streakLookup);
+
+	const uncachedSongs: { chartDate: string; song: string; artist: string }[] = [];
+	for (const song of chartSongs) {
+		const key = `${song.chartDate}:${song.song}:${song.artist}`;
+		if (cachedStreaks[key] != null) {
+			song.weeksInTop5 = cachedStreaks[key]!;
+		} else {
+			uncachedSongs.push({ chartDate: song.chartDate, song: song.song, artist: song.artist });
+		}
+	}
+
+	if (uncachedSongs.length > 0) {
+		const inflight = new Map<string, Promise<BillboardChart | null>>();
+		const fetchChart = (date: string) => {
+			if (!inflight.has(date)) {
+				inflight.set(
+					date,
+					svelteKitFetch(`/billboard/date/${date}.json`)
+						.then((res) => (res.ok ? (res.json() as Promise<BillboardChart>) : null))
+						.catch(() => null)
+				);
+			}
+			return inflight.get(date)!;
+		};
+
+		const streakResults = await Promise.all(
+			uncachedSongs.map(async (s) => ({
+				...s,
+				weeks: await calculateTop5Streak(s.song, s.artist, s.chartDate, validDates, fetchChart),
+			}))
+		);
+
+		for (const result of streakResults) {
+			const match = chartSongs.find(
+				(s) => s.chartDate === result.chartDate && s.song === result.song && s.artist === result.artist
+			);
+			if (match) match.weeksInTop5 = result.weeks;
+		}
+
+		await cacheStreaks(
+			streakResults.map((r) => ({
+				chartDate: r.chartDate,
+				song: r.song,
+				artist: r.artist,
+				weeks: r.weeks,
+			}))
+		);
+	}
+
+	// --- Phase 3: Search Spotify and stream results ---
 	const totalSongs = chartSongs.length;
 
-	// Create SSE stream
 	const stream = new ReadableStream({
 		async start(controller) {
 			const encoder = new TextEncoder();
@@ -71,7 +188,6 @@ export const POST: RequestHandler = async ({ request }) => {
 					} | null = null;
 					let fromCache = false;
 
-					// Check cache first
 					const cached = await getFromCache(chartSong.song, chartSong.artist);
 
 					if (cached) {
@@ -79,7 +195,6 @@ export const POST: RequestHandler = async ({ request }) => {
 						fromCache = true;
 						cacheHits++;
 					} else {
-						// Check if we already know this song isn't on Spotify
 						const notFound = await isNotFoundCached(chartSong.song, chartSong.artist);
 
 						if (notFound) {
@@ -87,8 +202,12 @@ export const POST: RequestHandler = async ({ request }) => {
 							fromCache = true;
 							cacheHits++;
 						} else {
-							// Search Spotify (pass year for better matching)
-							spotifyTrack = await searchTrack(accessToken, chartSong.song, chartSong.artist, chartSong.year);
+							spotifyTrack = await searchTrack(
+								accessToken,
+								chartSong.song,
+								chartSong.artist,
+								chartSong.year
+							);
 							apiCalls++;
 
 							if (spotifyTrack) {
@@ -97,7 +216,6 @@ export const POST: RequestHandler = async ({ request }) => {
 								await cacheNotFound(chartSong.song, chartSong.artist);
 							}
 
-							// Small delay to avoid rate limiting (only for API calls)
 							await new Promise((r) => setTimeout(r, 80));
 						}
 					}
@@ -111,33 +229,24 @@ export const POST: RequestHandler = async ({ request }) => {
 						fromCache,
 						lastWeekPosition: chartSong.lastWeekPosition,
 						positionChange: chartSong.positionChange,
-						weeksInTop5: chartSong.weeksInTop5
+						weeksInTop5: chartSong.weeksInTop5,
 					};
 
 					allSongs.push(songEntry);
-
-					// Send the song with progress
 					send('song', { ...songEntry, progress: processed, total: totalSongs });
 				}
 
-				// Find duplicates (same song appearing in multiple years)
-				const songKeys = allSongs
-					.filter((s) => s.spotify)
-					.map((s) => s.spotify!.uri);
-				const duplicateUris = songKeys.filter((uri, index) => songKeys.indexOf(uri) !== index);
-
+				const uris = allSongs.filter((s) => s.spotify).map((s) => s.spotify!.uri);
+				const duplicateUris = uris.filter((uri, i) => uris.indexOf(uri) !== i);
 				send('duplicates', { uris: [...new Set(duplicateUris)] });
 
-				// Count stats
-				const trackUris = allSongs.filter((s) => s.spotify).map((s) => s.spotify!.uri);
 				const notFoundCount = allSongs.filter((s) => !s.spotify).length;
-
 				send('complete', {
 					totalSongs: allSongs.length,
-					foundSongs: trackUris.length,
+					foundSongs: uris.length,
 					notFoundCount,
 					cacheHits,
-					apiCalls
+					apiCalls,
 				});
 			} catch (e) {
 				console.error('Playlist generation error:', e);
@@ -145,14 +254,14 @@ export const POST: RequestHandler = async ({ request }) => {
 			} finally {
 				controller.close();
 			}
-		}
+		},
 	});
 
 	return new Response(stream, {
 		headers: {
 			'Content-Type': 'text/event-stream',
 			'Cache-Control': 'no-cache',
-			Connection: 'keep-alive'
-		}
+			Connection: 'keep-alive',
+		},
 	});
 };
