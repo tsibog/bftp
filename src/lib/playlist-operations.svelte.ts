@@ -1,10 +1,3 @@
-import {
-	calculateTop5Streak,
-	getChartDatesForWeek,
-	getPositionChange,
-	type BillboardChart,
-} from '$lib/billboard';
-import validDates from '$lib/data/valid_dates.json';
 import type { FetchStats, Progress, Song } from '$lib/types';
 
 export class PlaylistOperations {
@@ -76,107 +69,12 @@ export class PlaylistOperations {
 		this.songsReady = false;
 
 		try {
-			const chartDates = getChartDatesForWeek(week, yearRange[0], yearRange[1], validDates);
-
-			const chartSongs: {
-				year: number;
-				chartDate: string;
-				song: string;
-				artist: string;
-				position: number;
-				lastWeekPosition: number | null;
-				positionChange: 'up' | 'down' | 'same' | 'new';
-				weeksInTop5: { before: number; after: number };
-			}[] = [];
-
-			for (const [year, chartDate] of chartDates) {
-				try {
-					const res = await fetch(`/billboard/date/${chartDate}.json`);
-					if (!res.ok) continue;
-
-					const chart: BillboardChart = await res.json();
-					const top5 = chart.data.slice(0, 5);
-
-					for (const entry of top5) {
-						chartSongs.push({
-							year,
-							chartDate,
-							song: entry.song,
-							artist: entry.artist,
-							position: entry.this_week,
-							lastWeekPosition: entry.last_week,
-							positionChange: getPositionChange(entry.this_week, entry.last_week),
-							weeksInTop5: { before: 1, after: 0 },
-						});
-					}
-				} catch {
-					continue;
-				}
-			}
-
-			if (chartSongs.length === 0) {
-				this.showError('No chart data found for the selected week and years');
-				return;
-			}
-
-			const streakLookup = chartSongs.map((s) => ({
-				chartDate: s.chartDate,
-				song: s.song,
-				artist: s.artist,
-			}));
-
-			const streakRes = await fetch(
-				`/api/streaks?songs=${encodeURIComponent(JSON.stringify(streakLookup))}`
-			);
-			const cachedStreaks: Record<string, { before: number; after: number }> = streakRes.ok
-				? await streakRes.json()
-				: {};
-
-			const streaksToCache: {
-				chartDate: string;
-				song: string;
-				artist: string;
-				weeks: { before: number; after: number };
-			}[] = [];
-
-			for (const song of chartSongs) {
-				const key = `${song.chartDate}:${song.song}:${song.artist}`;
-				if (cachedStreaks[key] !== undefined) {
-					song.weeksInTop5 = cachedStreaks[key];
-				} else {
-					const weeks = await calculateTop5Streak(
-						song.song,
-						song.artist,
-						song.chartDate,
-						validDates,
-						async (date) => {
-							const res = await fetch(`/billboard/date/${date}.json`);
-							if (!res.ok) return null;
-							return res.json();
-						}
-					);
-					song.weeksInTop5 = weeks;
-					streaksToCache.push({
-						chartDate: song.chartDate,
-						song: song.song,
-						artist: song.artist,
-						weeks,
-					});
-				}
-			}
-
-			if (streaksToCache.length > 0) {
-				await fetch('/api/streaks', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ streaks: streaksToCache }),
-				});
-			}
-
+			// Single request — server fetches charts, calculates streaks,
+			// searches Spotify, and streams everything back via SSE.
 			const response = await fetch('/api/playlist', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ songs: chartSongs }),
+				body: JSON.stringify({ week, yearRange }),
 			});
 
 			if (!response.ok) throw new Error(`HTTP ${response.status}`);

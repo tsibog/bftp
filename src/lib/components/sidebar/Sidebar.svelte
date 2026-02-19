@@ -110,7 +110,7 @@
 
   <div class="flex-1"></div>
 
-  {#if typeof window !== "undefined" && window.location.hostname === "127.0.0.1"}
+  {#if typeof window !== "undefined" && new URLSearchParams(window.location.search).get("mode") === "debug"}
     <div class="mb-4 border-t border-border pt-4">
       <button
         class="w-full rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive hover:bg-destructive/20"
